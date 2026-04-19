@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: substation-seg-train:latest
+    container_name: substation-seg-train
+    runtime: nvidia  # 启用NVIDIA GPU支持
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      # 挂载数据集目录
+      - ./datasets:/workspace/datasets
+      # 挂载训练输出目录
+      - ./runs:/workspace/runs
+      # 挂载代码目录（开发模式）
+      - .:/workspace/substation-segmentation-dataset
+    ports:
+      - "6006:6006"  # TensorBoard端口
+    stdin_open: true
+    tty: true
+    working_dir: /workspace/substation-segmentation-dataset
+    command: /bin/bash
+
+  # TensorBoard服务
+  tensorboard:
+    image: substation-seg-train:latest
+    container_name: substation-seg-tensorboard
+    volumes:
+      - ./runs:/workspace/runs
+    ports:
+      - "6006:6006"
+    command: tensorboard --logdir=/workspace/runs --host=0.0.0.0
+    profiles:
+      - tensorboard

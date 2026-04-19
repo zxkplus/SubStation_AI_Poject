@@ -1,0 +1,47 @@
+# YOLOv6实例分割模型配置
+
+# 模型架构配置
+model:
+  name: yolov6s_seg  # 可选: yolov6n_seg, yolov6s_seg, yolov6m_seg, yolov6l_seg
+  pretrained: True  # 是否使用预训练权重
+  device: 0  # GPU设备ID，-1表示使用CPU
+
+# 网络配置
+network:
+  width_multiple: 0.50  # 通道宽度倍数 (n: 0.25, s: 0.50, m: 0.75, l: 1.0)
+  depth_multiple: 0.33  # 网络深度倍数 (n: 0.33, s: 0.33, m: 0.67, l: 1.0)
+  max_channel: 1024  # 最大通道数
+
+# Head配置
+head:
+  type: decoupled_head  # 解耦头
+  num_classes: 2  # 类别数量，会根据data.yaml自动更新
+  num_layers: 3  # 检测头层数
+
+# Mask Head配置（实例分割专用）
+mask_head:
+  num_prototypes: 32  # 原型数量
+  hidden_dim: 256  # 隐藏层维度
+  use_focal_loss: True  # 是否使用Focal Loss
+
+# 损失函数配置
+loss:
+  cls_loss_weight: 1.0
+  box_loss_weight: 2.5
+  dfl_loss_weight: 0.5
+  mask_loss_weight: 1.0  # mask损失权重
+
+# 训练策略
+training:
+  optimizer: 'AdamW'  # 优化器: SGD, Adam, AdamW
+  lr: 0.001  # 学习率
+  weight_decay: 0.0005  # 权重衰减
+  momentum: 0.937  # 动量
+  warmup_epochs: 3  # 预热epoch数
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+
+# 学习率调度器
+scheduler:
+  type: 'CosineAnnealingLR'  # 学习率调度器
+  min_lr: 0.0001  # 最小学习率

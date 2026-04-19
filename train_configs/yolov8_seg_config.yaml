@@ -1,0 +1,84 @@
+# YOLOv8实例分割模型配置（Ultralytics）
+
+# 模型配置
+model:
+  name: yolov8s-seg  # 可选: yolov8n-seg, yolov8s-seg, yolov8m-seg, yolov8l-seg, yolov8x-seg
+  pretrained: True  # 使用预训练权重
+  task: segment  # 任务类型：segment（实例分割）
+
+# 模型尺寸选择
+# n: nano - 最小最快，适合移动端
+# s: small - 平衡性能和速度
+# m: medium - 更好的精度
+# l: large - 高精度
+# x: xlarge - 最高精度
+
+# 训练参数（通过命令行参数覆盖）
+training:
+  epochs: 300
+  batch_size: 32
+  img_size: 640
+  optimizer: auto  # auto, SGD, Adam, AdamW
+  lr0: 0.01  # 初始学习率
+  lrf: 0.01  # 最终学习率（与lr0的比值）
+  momentum: 0.937  # SGD动量/Adam beta1
+  weight_decay: 0.0005  # 权重衰减
+  warmup_epochs: 3  # 预热轮数
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+  patience: 50  # 早停耐心值
+  amp: True  # 自动混合精度训练（FP16）
+
+# 数据增强参数
+augmentation:
+  hsv_h: 0.015  # 色调增强
+  hsv_s: 0.7    # 饱和度增强
+  hsv_v: 0.4    # 明度增强
+  degrees: 0.0  # 旋转角度（±度）
+  translate: 0.1  # 平移（±比例）
+  scale: 0.5    # 缩放（±比例）
+  shear: 0.0    # 剪切角度（±度）
+  perspective: 0.0  # 透视变换
+  flipud: 0.0   # 垂直翻转概率
+  fliplr: 0.5   # 水平翻转概率
+  mosaic: 1.0   # 马赛克增强概率
+  mixup: 0.0    # Mixup增强概率
+  copy_paste: 0.0  # 复制粘贴增强概率
+  close_mosaic: 10  # 最后N个epoch关闭mosaic
+
+# 损失函数权重（Ultralytics自动配置）
+loss:
+  box: 7.5     # 边界框损失权重
+  cls: 0.5     # 分类损失权重
+  dfl: 1.5     # DFL损失权重
+  mask: 1.0    # Mask损失权重（实例分割）
+
+# 验证参数
+validation:
+  conf_thres: 0.001  # 置信度阈值
+  iou_thres: 0.6     # IOU阈值
+  max_det: 300       # 每张图最大检测数
+
+# 导出参数
+export:
+  format: onnx
+  img_size: 640
+  batch: 1
+  half: False        # FP16量化
+  dynamic: False     # 动态输入尺寸
+  simplify: True     # 简化ONNX模型
+  opset: 12          # ONNX opset版本
+
+# YOLOv8特有参数
+yolov8_specific:
+  # Anchor-free设计（无需anchor）
+  anchor_free: True
+
+  # 解耦头
+  decoupled_head: True
+
+  # Task-aligned学习器
+  task_aligned_assigner: True
+
+  # 动态任务分配
+  dfl: True  # Distribution Focal Loss

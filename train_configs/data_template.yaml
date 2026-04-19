@@ -1,0 +1,51 @@
+# 数据集配置文件
+# 使用方法：根据实际路径修改下面的路径配置
+
+# 数据集根目录
+path: /path/to/your/dataset  # 修改为实际的yolo_output路径
+
+# 训练集和验证集路径（相对于path）
+train: train  # 训练集目录，包含images和labels子目录
+val: val      # 验证集目录，包含images和labels子目录
+test: test    # 测试集目录（可选）
+
+# 类别数量
+nc: 2  # 根据实际类别数量修改
+
+# 类别名称（与classes.txt中的顺序一致）
+names:
+  0: class_1  # 修改为实际类别名称
+  1: class_2  # 修改为实际类别名称
+
+# 图片尺寸（YOLO会自动resize，但这里指定目标尺寸）
+img_size: 640
+
+# 训练参数
+epochs: 300
+batch_size: 32
+workers: 8
+
+# 学习率相关
+lr0: 0.01
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+
+# 增强参数
+mosaic: 1.0
+mixup: 0.0
+copy_paste: 0.0
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.5
+
+# 实例分割特定参数
+mask_ratio: 4  # mask下采样比例
+overlap_mask: True  # 是否允许mask重叠
