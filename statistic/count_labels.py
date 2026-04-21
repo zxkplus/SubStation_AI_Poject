@@ -9,6 +9,7 @@ import orjson
 from datetime import datetime
 import random
 import shutil
+import threading
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -230,6 +231,33 @@ def _resolve_unique_path(dest_path: str):
         idx += 1
 
 
+def _load_completed_annotations(progress_path: Path):
+    if not progress_path.exists():
+        return set()
+    with open(progress_path, 'r', encoding='utf-8') as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def _append_completed_annotation(progress_path: Path, annotation_path: str, lock: threading.Lock):
+    with lock:
+        with open(progress_path, 'a', encoding='utf-8') as f:
+            f.write(annotation_path + '\n')
+
+
+def _atomic_copy(src_path: str, dst_path: str):
+    src_path = Path(src_path)
+    dst_path = Path(dst_path)
+    tmp_path = dst_path.with_suffix(dst_path.suffix + '.tmp_copy')
+
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    with open(src_path, 'rb') as src_file, open(tmp_path, 'wb') as dst_file:
+        shutil.copyfileobj(src_file, dst_file)
+
+    os.replace(tmp_path, dst_path)
+
+
 def _find_image_for_annotation(annotation_path: str):
     annotation_path = Path(annotation_path)
     ann_dir = annotation_path.parent
@@ -258,16 +286,18 @@ def _find_image_for_annotation(annotation_path: str):
     return None
 
 
-def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, max_workers: int = None, show_progress: bool = True):
-    """将图片和对应标注按类别复制到目标目录。"""
+def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, max_workers: int = None, show_progress: bool = True, resume: bool = True):
+    """将图片和对应标注按类别复制到目标目录。支持中断后继续运行。"""
     if ignore_labels is None:
         ignore_labels = ['通用-不识别']
 
     annotation_files = []
-    for root, _, files in os.walk(root_dir):
-        for filename in files:
-            if filename.endswith(('.annotate', '.json')):
-                annotation_files.append(os.path.join(root, filename))
+    with tqdm(desc="扫描标注文件", unit="file", colour="blue") as pbar:
+        for root, _, files in os.walk(root_dir):
+            for filename in files:
+                if filename.endswith(('.annotate', '.json')):
+                    annotation_files.append(os.path.join(root, filename))
+                    pbar.update(1)
 
     if not annotation_files:
         print(f"未找到标注文件，无法执行复制操作: {root_dir}")
@@ -276,12 +306,24 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
     max_workers = max_workers or os.cpu_count() or 4
     copied_counts = defaultdict(int)
     skipped_count = 0
+    resumed_count = 0
     error_count = 0
 
     target_root = Path(target_dir)
     target_root.mkdir(parents=True, exist_ok=True)
 
+    progress_file = target_root / '.copy_progress.txt'
+    completed_annotations = _load_completed_annotations(progress_file) if resume else set()
+    if completed_annotations:
+        print(f"检测到已有复制进度记录，自动跳过 {len(completed_annotations)} 个已完成标注文件。")
+    progress_lock = threading.Lock()
+
     def _copy_pair(annotation_path: str):
+        if annotation_path in completed_annotations:
+            labels, _, filepath = process_file(annotation_path)
+            category = labels[0] if labels else None
+            return 'already_done', category, annotation_path
+
         labels, _, filepath = process_file(annotation_path)
         valid_labels = [label for label in labels if label not in ignore_labels]
         if not valid_labels:
@@ -299,8 +341,22 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
         dest_annotation = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(filepath)))
 
         try:
-            shutil.copy2(image_path, str(dest_image))
-            shutil.copy2(filepath, str(dest_annotation))
+            if dest_image.exists() and dest_image.stat().st_size == os.path.getsize(image_path):
+                pass
+            else:
+                if dest_image.exists():
+                    dest_image.unlink()
+                _atomic_copy(image_path, str(dest_image))
+
+            if dest_annotation.exists() and dest_annotation.stat().st_size == os.path.getsize(filepath):
+                pass
+            else:
+                if dest_annotation.exists():
+                    dest_annotation.unlink()
+                _atomic_copy(filepath, str(dest_annotation))
+
+            _append_completed_annotation(progress_file, annotation_path, progress_lock)
+            completed_annotations.add(annotation_path)
             return 'copied', category, filepath
         except Exception as e:
             return 'error', category, f"{filepath} -> {e}"
@@ -311,6 +367,8 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
             status, category, info = future.result()
             if status == 'copied':
                 copied_counts[category] += 1
+            elif status == 'already_done':
+                resumed_count += 1
             elif status == 'skipped':
                 skipped_count += 1
             elif status == 'no_image':
@@ -324,6 +382,7 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
     print("复制完成！")
     print(f"总标注文件: {len(annotation_files)}")
     print(f"已复制样本: {sum(copied_counts.values())}")
+    print(f"已跳过已完成: {resumed_count}")
     print(f"跳过文件: {skipped_count}")
     print(f"失败文件: {error_count}")
     print(f"目标目录: {target_root}")
@@ -338,10 +397,12 @@ def count_labels(root_dir: str, max_workers: int = None, output_file: str = None
 
     # 收集所有标注文件
     annotation_files = []
-    for root, _, files in os.walk(root_dir):
-        for filename in files:
-            if filename.endswith(('.annotate', '.json')):
-                annotation_files.append(os.path.join(root, filename))
+    with tqdm(desc="扫描标注文件", unit="file", colour="blue") as pbar:
+        for root, _, files in os.walk(root_dir):
+            for filename in files:
+                if filename.endswith(('.annotate', '.json')):
+                    annotation_files.append(os.path.join(root, filename))
+                    pbar.update(1)
 
     total_files = len(annotation_files)
     print(f"共发现 {total_files} 个标注文件，开始并行统计...\n")
