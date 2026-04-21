@@ -1,9 +1,10 @@
 import os
 import json
+from pathlib import Path
 from collections import Counter, defaultdict
 import argparse
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import orjson
 from datetime import datetime
 import random
@@ -213,6 +214,124 @@ def process_file(filepath: str):
         return [], False, filepath  # 出错返回空列表
 
 
+def _resolve_unique_path(dest_path: str):
+    dest_path = Path(dest_path)
+    if not dest_path.exists():
+        return dest_path
+
+    stem = dest_path.stem
+    suffix = dest_path.suffix
+    parent = dest_path.parent
+    idx = 1
+    while True:
+        candidate = parent / f"{stem}_{idx}{suffix}"
+        if not candidate.exists():
+            return candidate
+        idx += 1
+
+
+def _find_image_for_annotation(annotation_path: str):
+    annotation_path = Path(annotation_path)
+    ann_dir = annotation_path.parent
+    ann_name = annotation_path.name
+    image_exts = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']
+
+    stems = []
+    if ann_name.endswith('.annotate'):
+        stems.append(ann_name[:-len('.annotate')])
+    else:
+        stems.append(annotation_path.stem)
+
+    for stem in stems:
+        # 如果已包含图片后缀，则直接尝试原名
+        for ext in image_exts:
+            if stem.lower().endswith(ext):
+                candidate = ann_dir / stem
+                if candidate.exists():
+                    return str(candidate)
+        # 否则尝试添加常见后缀
+        for ext in image_exts:
+            candidate = ann_dir / f"{stem}{ext}"
+            if candidate.exists():
+                return str(candidate)
+
+    return None
+
+
+def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, max_workers: int = None, show_progress: bool = True):
+    """将图片和对应标注按类别复制到目标目录。"""
+    if ignore_labels is None:
+        ignore_labels = ['通用-不识别']
+
+    annotation_files = []
+    for root, _, files in os.walk(root_dir):
+        for filename in files:
+            if filename.endswith(('.annotate', '.json')):
+                annotation_files.append(os.path.join(root, filename))
+
+    if not annotation_files:
+        print(f"未找到标注文件，无法执行复制操作: {root_dir}")
+        return {}
+
+    max_workers = max_workers or os.cpu_count() or 4
+    copied_counts = defaultdict(int)
+    skipped_count = 0
+    error_count = 0
+
+    target_root = Path(target_dir)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    def _copy_pair(annotation_path: str):
+        labels, _, filepath = process_file(annotation_path)
+        valid_labels = [label for label in labels if label not in ignore_labels]
+        if not valid_labels:
+            return 'skipped', None, filepath
+
+        category = valid_labels[0]
+        image_path = _find_image_for_annotation(filepath)
+        if image_path is None:
+            return 'no_image', category, filepath
+
+        dest_dir = target_root / category
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        dest_image = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(image_path)))
+        dest_annotation = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(filepath)))
+
+        try:
+            shutil.copy2(image_path, str(dest_image))
+            shutil.copy2(filepath, str(dest_annotation))
+            return 'copied', category, filepath
+        except Exception as e:
+            return 'error', category, f"{filepath} -> {e}"
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_annotation = {executor.submit(_copy_pair, ann_path): ann_path for ann_path in annotation_files}
+        for future in tqdm(as_completed(future_to_annotation), total=len(annotation_files), desc="复制样本", unit="file", colour="cyan"):
+            status, category, info = future.result()
+            if status == 'copied':
+                copied_counts[category] += 1
+            elif status == 'skipped':
+                skipped_count += 1
+            elif status == 'no_image':
+                error_count += 1
+                print(f"未找到对应图片，跳过: {info} (类别: {category})")
+            else:
+                error_count += 1
+                print(f"复制失败: {info}")
+
+    print("\n" + "=" * 80)
+    print("复制完成！")
+    print(f"总标注文件: {len(annotation_files)}")
+    print(f"已复制样本: {sum(copied_counts.values())}")
+    print(f"跳过文件: {skipped_count}")
+    print(f"失败文件: {error_count}")
+    print(f"目标目录: {target_root}")
+    print("=" * 80)
+
+    return copied_counts
+
+
 def count_labels(root_dir: str, max_workers: int = None, output_file: str = None, sample_output_dir: str = None, sample_per_class: int = 10):
     """高速统计 + 保存结果到文本文件 + 随机采样"""
     print("正在扫描所有标注文件...")
@@ -385,7 +504,20 @@ if __name__ == "__main__":
                         help="采样输出目录（如果指定，将为每个类别随机选择样本）")
     parser.add_argument("--sample-per-class", type=int, default=10,
                         help="每个类别采样的样本数量（默认10）")
+    parser.add_argument("--copy-dir", type=str, default=None,
+                        help="将图片和标注文件按类别复制到目标目录，忽略 通用-不识别 类别")
+    parser.add_argument("--copy-workers", type=int, default=None,
+                        help="复制文件时使用的线程数（默认自动选择）")
 
     args = parser.parse_args()
 
     count_labels(args.root_dir, args.workers, args.output, args.sample_dir, args.sample_per_class)
+
+    if args.copy_dir:
+        copy_dataset_by_label(
+            args.root_dir,
+            args.copy_dir,
+            ignore_labels=['通用-不识别'],
+            max_workers=args.copy_workers,
+            show_progress=True
+        )
