@@ -4,12 +4,11 @@ from pathlib import Path
 from collections import Counter, defaultdict
 import argparse
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import orjson
 from datetime import datetime
 import random
 import shutil
-import threading
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -217,7 +216,16 @@ def process_file(filepath: str):
 
 def _resolve_unique_path(dest_path: str):
     dest_path = Path(dest_path)
-    if not dest_path.exists():
+
+    def _safe_exists(path: Path):
+        try:
+            return path.exists()
+        except OSError:
+            # 在 NTFS/FUSE、损坏符号链接或 I/O 异常时，stat 可能失败。
+            # 这里视为路径“已存在”，避免直接抛出异常并继续尝试下一个候选名。
+            return True
+
+    if not _safe_exists(dest_path):
         return dest_path
 
     stem = dest_path.stem
@@ -226,9 +234,30 @@ def _resolve_unique_path(dest_path: str):
     idx = 1
     while True:
         candidate = parent / f"{stem}_{idx}{suffix}"
-        if not candidate.exists():
+        if not _safe_exists(candidate):
             return candidate
         idx += 1
+
+
+def _safe_path_exists(path: Path):
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _safe_path_islink(path: Path):
+    try:
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def _safe_readlink(path: Path):
+    try:
+        return os.readlink(str(path))
+    except OSError:
+        return None
 
 
 def _load_completed_annotations(progress_path: Path):
@@ -238,24 +267,21 @@ def _load_completed_annotations(progress_path: Path):
         return {line.strip() for line in f if line.strip()}
 
 
-def _append_completed_annotation(progress_path: Path, annotation_path: str, lock: threading.Lock):
-    with lock:
-        with open(progress_path, 'a', encoding='utf-8') as f:
-            f.write(annotation_path + '\n')
+def _append_completed_annotation(progress_path: Path, annotation_path: str):
+    with open(progress_path, 'a', encoding='utf-8') as f:
+        f.write(annotation_path + '\n')
 
 
-def _atomic_copy(src_path: str, dst_path: str):
-    src_path = Path(src_path)
-    dst_path = Path(dst_path)
-    tmp_path = dst_path.with_suffix(dst_path.suffix + '.tmp_copy')
-
-    if tmp_path.exists():
-        tmp_path.unlink()
-
-    with open(src_path, 'rb') as src_file, open(tmp_path, 'wb') as dst_file:
-        shutil.copyfileobj(src_file, dst_file)
-
-    os.replace(tmp_path, dst_path)
+def _create_symlink(src_path: str, dst_path: str):
+    """创建符号链接而不是复制文件"""
+    try:
+        os.symlink(src_path, dst_path)
+    except Exception as e:
+        # 如果符号链接失败，尝试复制作为备用方案
+        try:
+            shutil.copyfile(src_path, dst_path)
+        except Exception:
+            raise e
 
 
 def _find_image_for_annotation(annotation_path: str):
@@ -286,8 +312,8 @@ def _find_image_for_annotation(annotation_path: str):
     return None
 
 
-def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, max_workers: int = None, show_progress: bool = True, resume: bool = True):
-    """将图片和对应标注按类别复制到目标目录。支持中断后继续运行。"""
+def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, show_progress: bool = True, resume: bool = True):
+    """将图片和对应标注文件按类别创建符号链接到目标目录。支持中断后继续运行。"""
     if ignore_labels is None:
         ignore_labels = ['通用-不识别']
 
@@ -303,7 +329,6 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
         print(f"未找到标注文件，无法执行复制操作: {root_dir}")
         return {}
 
-    max_workers = max_workers or os.cpu_count() or 4
     copied_counts = defaultdict(int)
     skipped_count = 0
     resumed_count = 0
@@ -316,7 +341,6 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
     completed_annotations = _load_completed_annotations(progress_file) if resume else set()
     if completed_annotations:
         print(f"检测到已有复制进度记录，自动跳过 {len(completed_annotations)} 个已完成标注文件。")
-    progress_lock = threading.Lock()
 
     def _copy_pair(annotation_path: str):
         if annotation_path in completed_annotations:
@@ -341,47 +365,53 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, ma
         dest_annotation = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(filepath)))
 
         try:
-            if dest_image.exists() and dest_image.stat().st_size == os.path.getsize(image_path):
+            if _safe_path_exists(dest_image) and _safe_path_islink(dest_image) and _safe_readlink(dest_image) == image_path:
                 pass
             else:
-                if dest_image.exists():
-                    dest_image.unlink()
-                _atomic_copy(image_path, str(dest_image))
+                if _safe_path_exists(dest_image):
+                    try:
+                        dest_image.unlink()
+                    except OSError:
+                        return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_image}"
+                _create_symlink(image_path, str(dest_image))
 
-            if dest_annotation.exists() and dest_annotation.stat().st_size == os.path.getsize(filepath):
+            if _safe_path_exists(dest_annotation) and _safe_path_islink(dest_annotation) and _safe_readlink(dest_annotation) == filepath:
                 pass
             else:
-                if dest_annotation.exists():
-                    dest_annotation.unlink()
-                _atomic_copy(filepath, str(dest_annotation))
+                if _safe_path_exists(dest_annotation):
+                    try:
+                        dest_annotation.unlink()
+                    except OSError:
+                        return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_annotation}"
+                _create_symlink(filepath, str(dest_annotation))
 
-            _append_completed_annotation(progress_file, annotation_path, progress_lock)
+            _append_completed_annotation(progress_file, annotation_path)
             completed_annotations.add(annotation_path)
             return 'copied', category, filepath
+        except OSError as e:
+            return 'skipped', category, f"{filepath} -> I/O 错误: {e}"
         except Exception as e:
             return 'error', category, f"{filepath} -> {e}"
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_annotation = {executor.submit(_copy_pair, ann_path): ann_path for ann_path in annotation_files}
-        for future in tqdm(as_completed(future_to_annotation), total=len(annotation_files), desc="复制样本", unit="file", colour="cyan"):
-            status, category, info = future.result()
-            if status == 'copied':
-                copied_counts[category] += 1
-            elif status == 'already_done':
-                resumed_count += 1
-            elif status == 'skipped':
-                skipped_count += 1
-            elif status == 'no_image':
-                error_count += 1
-                print(f"未找到对应图片，跳过: {info} (类别: {category})")
-            else:
-                error_count += 1
-                print(f"复制失败: {info}")
+    for annotation_path in tqdm(annotation_files, desc="创建链接", unit="file", colour="cyan"):
+        status, category, info = _copy_pair(annotation_path)
+        if status == 'copied':
+            copied_counts[category] += 1
+        elif status == 'already_done':
+            resumed_count += 1
+        elif status == 'skipped':
+            skipped_count += 1
+        elif status == 'no_image':
+            error_count += 1
+            print(f"未找到对应图片，跳过: {info} (类别: {category})")
+        else:
+            error_count += 1
+            print(f"复制失败: {info}")
 
     print("\n" + "=" * 80)
-    print("复制完成！")
+    print("链接创建完成！")
     print(f"总标注文件: {len(annotation_files)}")
-    print(f"已复制样本: {sum(copied_counts.values())}")
+    print(f"已创建链接: {sum(copied_counts.values())}")
     print(f"已跳过已完成: {resumed_count}")
     print(f"跳过文件: {skipped_count}")
     print(f"失败文件: {error_count}")
@@ -566,9 +596,7 @@ if __name__ == "__main__":
     parser.add_argument("--sample-per-class", type=int, default=10,
                         help="每个类别采样的样本数量（默认10）")
     parser.add_argument("--copy-dir", type=str, default=None,
-                        help="将图片和标注文件按类别复制到目标目录，忽略 通用-不识别 类别")
-    parser.add_argument("--copy-workers", type=int, default=None,
-                        help="复制文件时使用的线程数（默认自动选择）")
+                        help="将图片和标注文件按类别创建符号链接到目标目录，忽略 通用-不识别 类别")
 
     args = parser.parse_args()
 
@@ -579,6 +607,5 @@ if __name__ == "__main__":
             args.root_dir,
             args.copy_dir,
             ignore_labels=['通用-不识别'],
-            max_workers=args.copy_workers,
             show_progress=True
         )
