@@ -16,6 +16,7 @@ __pycache__/
 DATASET
 weights
 Sample*
+validation_vis*
 
 # 视频文件
 *.mp4
