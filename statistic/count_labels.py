@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 from collections import Counter, defaultdict
 import argparse
 from tqdm import tqdm
@@ -213,16 +214,225 @@ def process_file(filepath: str):
         return [], False, filepath  # 出错返回空列表
 
 
+def _resolve_unique_path(dest_path: str):
+    dest_path = Path(dest_path)
+
+    def _safe_exists(path: Path):
+        try:
+            return path.exists()
+        except OSError:
+            # 在 NTFS/FUSE、损坏符号链接或 I/O 异常时，stat 可能失败。
+            # 这里视为路径“已存在”，避免直接抛出异常并继续尝试下一个候选名。
+            return True
+
+    if not _safe_exists(dest_path):
+        return dest_path
+
+    stem = dest_path.stem
+    suffix = dest_path.suffix
+    parent = dest_path.parent
+    idx = 1
+    while True:
+        candidate = parent / f"{stem}_{idx}{suffix}"
+        if not _safe_exists(candidate):
+            return candidate
+        idx += 1
+
+
+def _safe_path_exists(path: Path):
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _safe_path_islink(path: Path):
+    try:
+        return path.is_symlink()
+    except OSError:
+        return False
+
+
+def _safe_readlink(path: Path):
+    try:
+        return os.readlink(str(path))
+    except OSError:
+        return None
+
+
+def _load_completed_annotations(progress_path: Path):
+    if not progress_path.exists():
+        return set()
+    with open(progress_path, 'r', encoding='utf-8') as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def _append_completed_annotation(progress_path: Path, annotation_path: str):
+    with open(progress_path, 'a', encoding='utf-8') as f:
+        f.write(annotation_path + '\n')
+
+
+def _create_symlink(src_path: str, dst_path: str):
+    """创建符号链接而不是复制文件"""
+    try:
+        os.symlink(src_path, dst_path)
+    except Exception as e:
+        # 如果符号链接失败，尝试复制作为备用方案
+        try:
+            shutil.copyfile(src_path, dst_path)
+        except Exception:
+            raise e
+
+
+def _find_image_for_annotation(annotation_path: str):
+    annotation_path = Path(annotation_path)
+    ann_dir = annotation_path.parent
+    ann_name = annotation_path.name
+    image_exts = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']
+
+    stems = []
+    if ann_name.endswith('.annotate'):
+        stems.append(ann_name[:-len('.annotate')])
+    else:
+        stems.append(annotation_path.stem)
+
+    for stem in stems:
+        # 如果已包含图片后缀，则直接尝试原名
+        for ext in image_exts:
+            if stem.lower().endswith(ext):
+                candidate = ann_dir / stem
+                if candidate.exists():
+                    return str(candidate)
+        # 否则尝试添加常见后缀
+        for ext in image_exts:
+            candidate = ann_dir / f"{stem}{ext}"
+            if candidate.exists():
+                return str(candidate)
+
+    return None
+
+
+def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, show_progress: bool = True, resume: bool = True):
+    """将图片和对应标注文件按类别创建符号链接到目标目录。支持中断后继续运行。"""
+    if ignore_labels is None:
+        ignore_labels = ['通用-不识别']
+
+    annotation_files = []
+    with tqdm(desc="扫描标注文件", unit="file", colour="blue") as pbar:
+        for root, _, files in os.walk(root_dir):
+            for filename in files:
+                if filename.endswith(('.annotate', '.json')):
+                    annotation_files.append(os.path.join(root, filename))
+                    pbar.update(1)
+
+    if not annotation_files:
+        print(f"未找到标注文件，无法执行复制操作: {root_dir}")
+        return {}
+
+    copied_counts = defaultdict(int)
+    skipped_count = 0
+    resumed_count = 0
+    error_count = 0
+
+    target_root = Path(target_dir)
+    target_root.mkdir(parents=True, exist_ok=True)
+
+    progress_file = target_root / '.copy_progress.txt'
+    completed_annotations = _load_completed_annotations(progress_file) if resume else set()
+    if completed_annotations:
+        print(f"检测到已有复制进度记录，自动跳过 {len(completed_annotations)} 个已完成标注文件。")
+
+    def _copy_pair(annotation_path: str):
+        if annotation_path in completed_annotations:
+            labels, _, filepath = process_file(annotation_path)
+            category = labels[0] if labels else None
+            return 'already_done', category, annotation_path
+
+        labels, _, filepath = process_file(annotation_path)
+        valid_labels = [label for label in labels if label not in ignore_labels]
+        if not valid_labels:
+            return 'skipped', None, filepath
+
+        category = valid_labels[0]
+        image_path = _find_image_for_annotation(filepath)
+        if image_path is None:
+            return 'no_image', category, filepath
+
+        dest_dir = target_root / category
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        dest_image = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(image_path)))
+        dest_annotation = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(filepath)))
+
+        try:
+            if _safe_path_exists(dest_image) and _safe_path_islink(dest_image) and _safe_readlink(dest_image) == image_path:
+                pass
+            else:
+                if _safe_path_exists(dest_image):
+                    try:
+                        dest_image.unlink()
+                    except OSError:
+                        return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_image}"
+                _create_symlink(image_path, str(dest_image))
+
+            if _safe_path_exists(dest_annotation) and _safe_path_islink(dest_annotation) and _safe_readlink(dest_annotation) == filepath:
+                pass
+            else:
+                if _safe_path_exists(dest_annotation):
+                    try:
+                        dest_annotation.unlink()
+                    except OSError:
+                        return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_annotation}"
+                _create_symlink(filepath, str(dest_annotation))
+
+            _append_completed_annotation(progress_file, annotation_path)
+            completed_annotations.add(annotation_path)
+            return 'copied', category, filepath
+        except OSError as e:
+            return 'skipped', category, f"{filepath} -> I/O 错误: {e}"
+        except Exception as e:
+            return 'error', category, f"{filepath} -> {e}"
+
+    for annotation_path in tqdm(annotation_files, desc="创建链接", unit="file", colour="cyan"):
+        status, category, info = _copy_pair(annotation_path)
+        if status == 'copied':
+            copied_counts[category] += 1
+        elif status == 'already_done':
+            resumed_count += 1
+        elif status == 'skipped':
+            skipped_count += 1
+        elif status == 'no_image':
+            error_count += 1
+            print(f"未找到对应图片，跳过: {info} (类别: {category})")
+        else:
+            error_count += 1
+            print(f"复制失败: {info}")
+
+    print("\n" + "=" * 80)
+    print("链接创建完成！")
+    print(f"总标注文件: {len(annotation_files)}")
+    print(f"已创建链接: {sum(copied_counts.values())}")
+    print(f"已跳过已完成: {resumed_count}")
+    print(f"跳过文件: {skipped_count}")
+    print(f"失败文件: {error_count}")
+    print(f"目标目录: {target_root}")
+    print("=" * 80)
+
+    return copied_counts
+
+
 def count_labels(root_dir: str, max_workers: int = None, output_file: str = None, sample_output_dir: str = None, sample_per_class: int = 10):
     """高速统计 + 保存结果到文本文件 + 随机采样"""
     print("正在扫描所有标注文件...")
 
     # 收集所有标注文件
     annotation_files = []
-    for root, _, files in os.walk(root_dir):
-        for filename in files:
-            if filename.endswith(('.annotate', '.json')):
-                annotation_files.append(os.path.join(root, filename))
+    with tqdm(desc="扫描标注文件", unit="file", colour="blue") as pbar:
+        for root, _, files in os.walk(root_dir):
+            for filename in files:
+                if filename.endswith(('.annotate', '.json')):
+                    annotation_files.append(os.path.join(root, filename))
+                    pbar.update(1)
 
     total_files = len(annotation_files)
     print(f"共发现 {total_files} 个标注文件，开始并行统计...\n")
@@ -385,7 +595,17 @@ if __name__ == "__main__":
                         help="采样输出目录（如果指定，将为每个类别随机选择样本）")
     parser.add_argument("--sample-per-class", type=int, default=10,
                         help="每个类别采样的样本数量（默认10）")
+    parser.add_argument("--copy-dir", type=str, default=None,
+                        help="将图片和标注文件按类别创建符号链接到目标目录，忽略 通用-不识别 类别")
 
     args = parser.parse_args()
 
     count_labels(args.root_dir, args.workers, args.output, args.sample_dir, args.sample_per_class)
+
+    if args.copy_dir:
+        copy_dataset_by_label(
+            args.root_dir,
+            args.copy_dir,
+            ignore_labels=['通用-不识别'],
+            show_progress=True
+        )
