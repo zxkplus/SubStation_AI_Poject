@@ -19,6 +19,8 @@ Sample*
 validation_vis*
 test_data
 test_output
+logs
+demo_logs
 
 # 视频文件
 *.mp4
