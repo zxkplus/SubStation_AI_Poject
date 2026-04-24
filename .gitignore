@@ -17,6 +17,8 @@ DATASET
 weights
 Sample*
 validation_vis*
+test_data
+test_output
 
 # 视频文件
 *.mp4
