@@ -1,9 +1,9 @@
 """
-YOLO数据集转换模块
-将分割标注数据转换为YOLO格式，支持：
-1. 根据mask外接框裁剪图片
-2. 保留mask轮廓信息，转换为YOLO polygon格式
-3. 生成符合YOLO规范的标注文件
+数据集转换模块
+将分割标注数据转换为裁剪格式，支持：
+1. 根据所有mask的联合外接框裁剪图片
+2. 保留mask轮廓信息，坐标变换适应裁剪后图片
+3. 生成JSON格式标注文件
 4. 多线程并行处理加速转换
 """
 
@@ -19,8 +19,8 @@ import threading
 import random
 
 
-class YOLOConverter:
-    """YOLO数据集转换器（支持多线程并行处理）"""
+class DatasetConverter:
+    """数据集转换器（支持多线程并行处理）"""
     
     def __init__(self, input_dataset_path: str, output_dataset_path: str):
         """
@@ -28,15 +28,11 @@ class YOLOConverter:
         
         Args:
             input_dataset_path: 输入数据集路径（原始数据）
-            output_dataset_path: 输出数据集路径（YOLO格式）
+            output_dataset_path: 输出数据集路径（裁剪格式）
         """
         self.input_path = Path(input_dataset_path)
         self.output_path = Path(output_dataset_path)
         self.supported_image_formats = {'.jpg', '.jpeg', '.png', '.bmp'}
-        
-        # 类别映射：{类别名: class_id}
-        self.class_mapping: Dict[str, int] = {}
-        self.next_class_id = 0
         
         # 线程锁
         self._lock = threading.Lock()
@@ -50,22 +46,6 @@ class YOLOConverter:
             'class_distribution': defaultdict(int),
             'image_sizes': defaultdict(list)  # {类别名: [(width, height), ...]}
         }
-    
-    def _get_class_id(self, class_name: str) -> int:
-        """
-        获取类别的数字ID，自动创建映射（线程安全）
-        
-        Args:
-            class_name: 类别名称
-            
-        Returns:
-            类别ID（整数）
-        """
-        with self._lock:
-            if class_name not in self.class_mapping:
-                self.class_mapping[class_name] = self.next_class_id
-                self.next_class_id += 1
-            return self.class_mapping[class_name]
     
     def _update_stats(self, converted: int = 0, skipped: int = 0, masks: int = 0,
                       class_dist: Dict[str, int] = None, size_dist: Dict[str, Tuple[int, int]] = None):
@@ -179,9 +159,9 @@ class YOLOConverter:
         json_path: str,
         expand_ratio: float = 0.0,
         min_size: int = 32
-    ) -> List[Tuple[np.ndarray, str, List[List[float]], Tuple[int, int, int, int]]]:
+    ) -> Optional[Tuple[np.ndarray, List[Tuple[List[List[float]], str]], Tuple[int, int, int, int], dict]]:
         """
-        裁剪图片并转换标注（保留polygon坐标）
+        裁剪图片并转换标注（计算联合bbox，变换坐标）
         
         Args:
             img_path: 图片路径
@@ -190,12 +170,12 @@ class YOLOConverter:
             min_size: 最小裁剪尺寸，低于此尺寸的mask将被跳过
             
         Returns:
-            [(裁剪图片, 类别名, 原始polygon坐标, 原图坐标下的bbox), ...]
+            (裁剪图片, [(变换后polygon, label), ...], 联合bbox, 原始json_data) 或 None
         """
         # 加载图片
         img = cv2.imread(img_path)
         if img is None:
-            return []
+            return None
         
         img_height, img_width = img.shape[:2]
         
@@ -203,79 +183,60 @@ class YOLOConverter:
         with open(json_path, 'r', encoding='utf-8') as f:
             json_data = json.load(f)
         
-        # 解析polygons（传入图片尺寸）
+        # 解析polygons
         polygons_with_labels = self.parse_json_polygons(json_data, img_height, img_width)
         
-        results = []
+        if not polygons_with_labels:
+            return None
+        
+        # 计算联合bbox
+        all_x_coords = []
+        all_y_coords = []
+        valid_polygons = []
         
         for polygon, label in polygons_with_labels:
-            # 获取外接矩形
-            x, y, w, h = self.get_mask_bbox(polygon)
-            
             # 检查最小尺寸
+            x, y, w, h = self.get_mask_bbox(polygon)
             if w < min_size or h < min_size:
                 continue
-            
-            # 扩展边界框
-            if expand_ratio > 0:
-                expand_w = int(w * expand_ratio)
-                expand_h = int(h * expand_ratio)
-                x = max(0, x - expand_w)
-                y = max(0, y - expand_h)
-                w = min(img_width - x, w + 2 * expand_w)
-                h = min(img_height - y, h + 2 * expand_h)
-            
-            # 裁剪图片
-            cropped_img = img[y:y+h, x:x+w]
-            
-            # 保存原始polygon坐标和bbox
-            results.append((cropped_img, label, polygon, (x, y, w, h)))
+            all_x_coords.extend([p[0] for p in polygon])
+            all_y_coords.extend([p[1] for p in polygon])
+            valid_polygons.append((polygon, label))
         
-        return results
-    
-    def polygon_to_yolo_format(
-        self,
-        original_polygon: List[List[float]],
-        crop_bbox: Tuple[int, int, int, int],
-        img_width: int,
-        img_height: int,
-        class_name: str
-    ) -> str:
-        """
-        将polygon转换为YOLO polygon格式（归一化坐标）
+        if not valid_polygons:
+            return None
         
-        Args:
-            original_polygon: 原始polygon坐标 [[x1, y1], [x2, y2], ...]
-            crop_bbox: 裁剪边界框 (x, y, w, h)
-            img_width: 裁剪后图片宽度
-            img_height: 裁剪后图片高度
-            class_name: 类别名称
-            
-        Returns:
-            YOLO polygon格式的标注行: class_id x1 y1 x2 y2 ...
-        """
-        crop_x, crop_y, crop_w, crop_h = crop_bbox
+        # 联合bbox
+        x_min = int(min(all_x_coords))
+        y_min = int(min(all_y_coords))
+        x_max = int(max(all_x_coords))
+        y_max = int(max(all_y_coords))
+        w = x_max - x_min + 1
+        h = y_max - y_min + 1
         
-        # 转换polygon坐标到裁剪后的小图坐标系
-        cropped_polygon = []
-        for point in original_polygon:
-            new_x = point[0] - crop_x
-            new_y = point[1] - crop_y
-            # 归一化到0-1
-            norm_x = new_x / img_width
-            norm_y = new_y / img_height
-            # 确保在0-1范围内
-            norm_x = max(0.0, min(1.0, norm_x))
-            norm_y = max(0.0, min(1.0, norm_y))
-            cropped_polygon.append(norm_x)
-            cropped_polygon.append(norm_y)
+        # 扩展边界框
+        if expand_ratio > 0:
+            expand_w = int(w * expand_ratio)
+            expand_h = int(h * expand_ratio)
+            x_min = max(0, x_min - expand_w)
+            y_min = max(0, y_min - expand_h)
+            w = min(img_width - x_min, w + 2 * expand_w)
+            h = min(img_height - y_min, h + 2 * expand_h)
         
-        class_id = self._get_class_id(class_name)
+        # 裁剪图片
+        cropped_img = img[y_min:y_min+h, x_min:x_min+w]
         
-        # 转换为字符串格式: class_id x1 y1 x2 y2 ...
-        polygon_str = ' '.join([f"{coord:.6f}" for coord in cropped_polygon])
+        # 变换polygons坐标
+        transformed_polygons = []
+        for polygon, label in valid_polygons:
+            new_polygon = []
+            for point in polygon:
+                new_x = point[0] - x_min
+                new_y = point[1] - y_min
+                new_polygon.append([new_x, new_y])
+            transformed_polygons.append((new_polygon, label))
         
-        return f"{class_id} {polygon_str}"
+        return cropped_img, transformed_polygons, (x_min, y_min, w, h), json_data
     
     def _process_single_image(
         self,
@@ -300,50 +261,72 @@ class YOLOConverter:
         processed_names = []
         
         # 裁剪并转换
-        cropped_results = self.crop_and_convert(
+        result = self.crop_and_convert(
             img_path, json_path,
             expand_ratio=expand_ratio,
             min_size=min_size
         )
         
-        if not cropped_results:
+        if result is None:
             skipped = 1
             return converted, skipped, masks, dict(class_dist), processed_names
         
+        cropped_img, transformed_polygons, bbox, original_json_data = result
+        
+        converted = 1
+        masks = len(transformed_polygons)
+        for _, label in transformed_polygons:
+            class_dist[label] += 1
+        
         base_name = Path(img_path).stem
         
-        # 保存每个裁剪结果
-        for idx, (cropped_img, label, polygon, bbox) in enumerate(cropped_results):
-            converted += 1
-            masks += 1
-            class_dist[label] += 1
-            
-            # 生成唯一文件名
-            output_name = f"{base_name_prefix}{base_name}_{idx+1}"
-            processed_names.append(output_name)
-            
-            # 保存裁剪图片
-            img_output_path = category_img_dir / f"{output_name}.jpg"
-            cv2.imwrite(str(img_output_path), cropped_img)
-            
-            # 获取裁剪后图片尺寸
-            crop_width = cropped_img.shape[1]
-            crop_height = cropped_img.shape[0]
-            
-            # 生成YOLO polygon标注（直接从polygon转换，不经过mask图像）
-            yolo_label = self.polygon_to_yolo_format(
-                polygon, bbox,
-                crop_width, crop_height,
-                label
-            )
-            
-            # 保存标注文件
-            label_output_path = category_label_dir / f"{output_name}.txt"
-            with open(label_output_path, 'w') as f:
-                f.write(yolo_label + '\n')
-            
-            # 记录尺寸信息
-            with self._lock:
+        # 生成唯一文件名
+        output_name = f"{base_name_prefix}{base_name}"
+        processed_names.append(output_name)
+        
+        # 保存裁剪图片
+        img_output_path = category_img_dir / f"{output_name}.jpg"
+        if not cv2.imwrite(str(img_output_path), cropped_img):
+            print(f"    图片保存失败: {img_output_path}")
+            skipped = 1
+            return converted, skipped, masks, dict(class_dist), processed_names
+        
+        # 获取裁剪后图片尺寸
+        crop_width = cropped_img.shape[1]
+        crop_height = cropped_img.shape[0]
+        
+        # 生成JSON标注（保留原始字段，更新相关信息）
+        json_data = original_json_data.copy()
+        
+        # 更新图片相关信息
+        json_data["imagePath"] = f"{output_name}.jpg"
+        json_data["imageWidth"] = crop_width
+        json_data["imageHeight"] = crop_height
+        json_data["imageData"] = None
+        
+        # 更新meta中的图片尺寸（LabelMe会优先使用meta字段）
+        if "meta" in json_data:
+            json_data["meta"]["width"] = crop_width
+            json_data["meta"]["height"] = crop_height
+        
+        # 更新shapes（使用变换后的polygons）
+        json_data["shapes"] = []
+        for polygon, label in transformed_polygons:
+            shape = {
+                "label": label,
+                "shape_type": "polygon",
+                "points": polygon
+            }
+            json_data["shapes"].append(shape)
+        
+        # 保存JSON文件
+        label_output_path = category_label_dir / f"{output_name}.json"
+        with open(label_output_path, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, ensure_ascii=False, indent=2)
+        
+        # 记录尺寸信息
+        with self._lock:
+            for _, label in transformed_polygons:
                 self.stats['image_sizes'][label].append((crop_width, crop_height))
         
         return converted, skipped, masks, dict(class_dist), processed_names
@@ -360,11 +343,8 @@ class YOLOConverter:
         num_workers: int
     ) -> Dict:
         """处理单个类别的所有样本（供多线程调用）"""
-        # 创建输出子目录
-        category_img_dir = category_output_path / output_images_subdir
-        category_label_dir = category_output_path / output_labels_subdir
-        category_img_dir.mkdir(parents=True, exist_ok=True)
-        category_label_dir.mkdir(parents=True, exist_ok=True)
+        # 创建输出目录（不创建子目录）
+        category_output_path.mkdir(parents=True, exist_ok=True)
         
         category_stats = {
             'total': len(samples),
@@ -381,7 +361,7 @@ class YOLOConverter:
                 future = executor.submit(
                     self._process_single_image,
                     img_path, json_path,
-                    category_img_dir, category_label_dir,
+                    category_output_path, category_output_path,  # 图片和标签保存到同一目录
                     expand_ratio, min_size,
                     f"{category}_"
                 )
@@ -404,11 +384,11 @@ class YOLOConverter:
     
     def convert_dataset(
         self,
-        samples_per_class: Optional[int] = None,
+        samples_per_class: Optional[int] = 100,
         expand_ratio: float = 0.0,
         min_size: int = 32,
-        output_images_subdir: str = "images",
-        output_labels_subdir: str = "labels",
+        output_images_subdir: str = "",
+        output_labels_subdir: str = "",
         preserve_category_structure: bool = True,
         num_workers: int = 8
     ):
@@ -416,19 +396,19 @@ class YOLOConverter:
         转换整个数据集（多线程并行处理）
         
         Args:
-            samples_per_class: 每个类别采样的样本数量，None表示全部
+            samples_per_class: 每个类别采样的样本数量，默认100
             expand_ratio: 边界框扩展比例
             min_size: 最小裁剪尺寸
-            output_images_subdir: 输出图片子目录名
-            output_labels_subdir: 输出标签子目录名
+            output_images_subdir: 输出图片子目录名（空字符串表示不创建子目录）
+            output_labels_subdir: 输出标签子目录名（空字符串表示不创建子目录）
             preserve_category_structure: 是否保留类别目录结构（默认为True）
             num_workers: 并行处理的线程数（默认为8）
         """
         print("=" * 60)
-        print("YOLO数据集转换（多线程并行）")
+        print("数据集转换（多线程并行）")
         print("=" * 60)
         print(f"并行线程数: {num_workers}")
-        print(f"标注格式: YOLO Polygon (保留轮廓信息)")
+        print(f"标注格式: JSON (保留轮廓信息)")
         print()
         
         # 创建根目录
@@ -459,6 +439,10 @@ class YOLOConverter:
             # 采样
             if samples_per_class is not None and len(samples) > samples_per_class:
                 samples = random.sample(samples, samples_per_class)
+            elif samples_per_class is None:
+                pass  # 全部
+            else:
+                samples = samples[:samples_per_class]  # 如果不足，取全部
             
             # 确定输出目录
             if preserve_category_structure:
@@ -474,7 +458,7 @@ class YOLOConverter:
             
             self.stats['total_images'] += len(samples)
         
-        print(f"总计待处理图片: {self.stats['total_images']}")
+        print(f"总计待处理图片: {self.stats['total_images']} (每个类别最多 {samples_per_class} 张)")
         print()
         
         # 使用线程池并行处理所有类别
@@ -515,22 +499,10 @@ class YOLOConverter:
                     print(f"  [{category}] 处理失败: {str(e)}")
         
         # 保存类别映射
-        self._save_class_mapping()
+        # self._save_class_mapping()  # 不需要
         
         # 打印统计报告
         self._print_report()
-    
-    def _save_class_mapping(self):
-        """保存类别映射文件"""
-        mapping_path = self.output_path / "classes.txt"
-        
-        # 按class_id排序
-        with self._lock:
-            sorted_classes = sorted(self.class_mapping.items(), key=lambda x: x[1])
-        
-        with open(mapping_path, 'w', encoding='utf-8') as f:
-            for class_name, class_id in sorted_classes:
-                f.write(f"{class_id} {class_name}\n")
     
     def _print_report(self):
         """打印转换报告"""
@@ -564,12 +536,11 @@ class YOLOConverter:
         
         print(f"\n【输出目录结构】")
         print(f"  根目录: {self.output_path}")
-        print(f"  类别文件: {self.output_path / 'classes.txt'}")
         print(f"\n  按类别分目录结构:")
         for category in self.stats['class_distribution'].keys():
             category_path = self.output_path / category
             print(f"    {category}/")
-            print(f"      images/  # 裁剪图片")
-            print(f"      labels/  # YOLO polygon标注文件")
+            print(f"      *.jpg  # 裁剪图片")
+            print(f"      *.json # JSON标注文件")
         
         print("\n" + "=" * 60)

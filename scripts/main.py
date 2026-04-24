@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_loader import DatasetLoader
 from statistics import DatasetStats
 from visualization import MaskVisualizer
+from yolo_converter import DatasetConverter
 
 
 def main():
@@ -31,16 +32,16 @@ def main():
     parser.add_argument(
         '--mode',
         type=str,
-        choices=['stats', 'visualize', 'full', 'yolo'],
+        choices=['stats', 'visualize', 'full', 'yolo', 'convert'],
         default='full',
-        help='运行模式: stats(统计), visualize(可视化), full(统计+可视化), yolo(YOLO格式转换)'
+        help='运行模式: stats(统计), visualize(可视化), full(统计+可视化), yolo(YOLO格式转换), convert(数据集转换，图片和标注文件在同一目录)'
     )
     
     parser.add_argument(
         '--samples_per_class',
         type=int,
         default=2,
-        help='每个类别随机选择的样本数量（用于可视化或采样转换）'
+        help='每个类别随机选择的样本数量（用于可视化或采样转换），convert模式默认100'
     )
     
     parser.add_argument(
@@ -57,12 +58,12 @@ def main():
         help='可视化图片输出目录'
     )
     
-    # YOLO转换专用参数
+    # 数据集转换专用参数
     parser.add_argument(
         '--output_yolo_path',
         type=str,
         default=None,
-        help='YOLO格式输出路径（用于yolo模式）'
+        help='数据集转换输出路径（用于yolo/convert模式）'
     )
     
     parser.add_argument(
@@ -93,25 +94,41 @@ def main():
     print("=" * 60)
     print(f"数据集路径: {args.dataset_path}")
     print(f"运行模式: {args.mode}")
+    if args.mode in ['yolo', 'convert']:
+        print(f"输出路径: {args.output_yolo_path or '默认路径'}")
     print()
     
     try:
-        if args.mode == 'yolo':
-            # YOLO转换模式
-            from yolo_converter import YOLOConverter
+        if args.mode in ['yolo', 'convert']:
+            # 数据集转换模式
+            from yolo_converter import DatasetConverter
             
             if not args.output_yolo_path:
-                # 默认输出到输入目录的同级yolo_output文件夹
+                # 默认输出到输入目录的同级converted_dataset文件夹
                 parent_dir = os.path.dirname(os.path.abspath(args.dataset_path))
-                args.output_yolo_path = os.path.join(parent_dir, 'yolo_output')
+                args.output_yolo_path = os.path.join(parent_dir, 'converted_dataset')
             
-            converter = YOLOConverter(args.dataset_path, args.output_yolo_path)
-            converter.convert_dataset(
-                samples_per_class=args.samples_per_class,
-                expand_ratio=args.expand_ratio,
-                min_size=args.min_size,
-                num_workers=args.num_workers
-            )
+            converter = DatasetConverter(args.dataset_path, args.output_yolo_path)
+            
+            # 根据模式设置参数
+            if args.mode == 'convert':
+                # convert模式：不创建子目录，每个类别转换100张
+                converter.convert_dataset(
+                    samples_per_class=100,
+                    expand_ratio=args.expand_ratio,
+                    min_size=args.min_size,
+                    output_images_subdir="",  # 不创建images子目录
+                    output_labels_subdir="",  # 不创建labels子目录
+                    num_workers=args.num_workers
+                )
+            else:
+                # yolo模式：创建子目录，使用指定的samples_per_class
+                converter.convert_dataset(
+                    samples_per_class=args.samples_per_class,
+                    expand_ratio=args.expand_ratio,
+                    min_size=args.min_size,
+                    num_workers=args.num_workers
+                )
         
         else:
             # 统计/可视化模式
