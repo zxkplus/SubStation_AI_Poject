@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from service.app import app
 from service.inference import YOLOMaskService
+from service.schemas import InferenceRequest, InferenceResponse, ROI, MaskContour, DetectionResult, ROIResult
 
 client = TestClient(app)
 
@@ -148,3 +149,71 @@ def test_real_image_infer():
                 points = contour["points"]
                 draw.polygon(points, outline="red")
     image.save("test_output/infer_result.jpg")
+def test_inference_request_json():
+    """测试 InferenceRequest 的 JSON 序列化功能"""
+    import tempfile
+    import json
+
+    # 创建测试请求对象
+    request = InferenceRequest(
+        image_base64=create_base64_image(),
+        rois=[ROI(x1=10, y1=20, x2=100, y2=200)],
+        weights_path="test_weights.pt",
+        conf_threshold=0.5,
+        img_size=320,
+        device="cuda"
+    )
+
+    # 测试保存到 JSON
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+        temp_path = temp_file.name
+
+    try:
+        request.save_to_json(temp_path)
+
+        # 测试从 JSON 加载
+        loaded_request = InferenceRequest.load_from_json(temp_path)
+
+        # 验证数据一致性
+        assert loaded_request.image_base64 == request.image_base64
+        assert len(loaded_request.rois) == len(request.rois)
+        assert loaded_request.rois[0].x1 == request.rois[0].x1
+        assert loaded_request.weights_path == request.weights_path
+        assert loaded_request.conf_threshold == request.conf_threshold
+        assert loaded_request.img_size == request.img_size
+        assert loaded_request.device == request.device
+
+    finally:
+        import os
+        os.unlink(temp_path)
+
+
+def test_inference_response_json():
+    """测试 InferenceResponse 的 JSON 序列化功能"""
+    import tempfile
+
+    # 创建测试响应对象
+    response = InferenceResponse(
+        image_width=640,
+        image_height=480,
+        results=[]
+    )
+
+    # 测试保存到 JSON
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+        temp_path = temp_file.name
+
+    try:
+        response.save_to_json(temp_path)
+
+        # 测试从 JSON 加载
+        loaded_response = InferenceResponse.load_from_json(temp_path)
+
+        # 验证数据一致性
+        assert loaded_response.image_width == response.image_width
+        assert loaded_response.image_height == response.image_height
+        assert len(loaded_response.results) == len(response.results)
+
+    finally:
+        import os
+        os.unlink(temp_path)
