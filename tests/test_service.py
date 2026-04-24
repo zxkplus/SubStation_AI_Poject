@@ -217,3 +217,144 @@ def test_inference_response_json():
     finally:
         import os
         os.unlink(temp_path)
+
+
+def test_logger_basic():
+    """测试基础日志功能"""
+    import tempfile
+    from service.logger import ThreadSafeLogger
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        logger = ThreadSafeLogger(name="test_logger", log_dir=temp_dir, prefix="test")
+
+        # 测试不同级别的日志
+        logger.debug("Debug message")
+        logger.info("Info message")
+        logger.warning("Warning message")
+        logger.error("Error message")
+        logger.critical("Critical message")
+
+        # 检查日志文件是否创建
+        import glob
+        log_files = glob.glob(f"{temp_dir}/test_*.log")
+        assert len(log_files) == 1
+
+        # 检查日志文件内容
+        with open(log_files[0], 'r') as f:
+            content = f.read()
+            assert "Info message" in content
+            assert "Error message" in content
+            assert "Critical message" in content
+
+
+def test_logger_singleton():
+    """测试日志记录器单例模式"""
+    import tempfile
+    from service.logger import ThreadSafeLogger
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        logger1 = ThreadSafeLogger(name="singleton_test", log_dir=temp_dir, prefix="singleton")
+        logger2 = ThreadSafeLogger(name="singleton_test", log_dir=temp_dir, prefix="singleton")
+
+        # 应该是同一个实例
+        assert logger1 is logger2
+
+
+def test_logger_exception_handling():
+    """测试异常日志记录"""
+    import tempfile
+    from service.logger import ThreadSafeLogger
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        logger = ThreadSafeLogger(name="exception_test", log_dir=temp_dir, prefix="exception")
+
+        try:
+            raise ValueError("Test exception")
+        except ValueError as e:
+            logger.log_exception(e, "Custom message")
+
+        # 检查日志文件
+        import glob
+        log_files = glob.glob(f"{temp_dir}/exception_*.log")
+        assert len(log_files) == 1
+
+        with open(log_files[0], 'r') as f:
+            content = f.read()
+            assert "Custom message" in content
+            assert "Test exception" in content
+            assert "ValueError" in content
+
+
+def test_logger_level_setting():
+    """测试日志级别设置"""
+    import tempfile
+    from service.logger import ThreadSafeLogger
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        logger = ThreadSafeLogger(name="level_test", log_dir=temp_dir, prefix="level")
+
+        # 测试设置不同级别
+        logger.set_level("DEBUG")
+        assert logger.get_level() == "DEBUG"
+
+        logger.set_level("ERROR")
+        assert logger.get_level() == "ERROR"
+
+        logger.set_level("INFO")
+        assert logger.get_level() == "INFO"
+
+        # 测试无效级别
+        try:
+            logger.set_level("INVALID")
+            assert False, "应该抛出 ValueError"
+        except ValueError:
+            pass
+
+
+def test_logger_thread_safety():
+    """测试线程安全性"""
+    import tempfile
+    import threading
+    import time
+    from service.logger import ThreadSafeLogger
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        logger = ThreadSafeLogger(name="thread_test", log_dir=temp_dir, prefix="thread")
+
+        results = []
+        errors = []
+
+        def worker(thread_id):
+            try:
+                for i in range(10):
+                    logger.info(f"Thread {thread_id}: message {i}")
+                    time.sleep(0.001)  # 短暂延迟
+                results.append(f"Thread {thread_id} completed")
+            except Exception as e:
+                errors.append(f"Thread {thread_id} error: {e}")
+
+        # 启动多个线程
+        threads = []
+        for i in range(5):
+            t = threading.Thread(target=worker, args=(i,))
+            threads.append(t)
+            t.start()
+
+        # 等待所有线程完成
+        for t in threads:
+            t.join()
+
+        # 检查结果
+        assert len(results) == 5
+        assert len(errors) == 0
+
+        # 检查日志文件
+        import glob
+        log_files = glob.glob(f"{temp_dir}/thread_*.log")
+        assert len(log_files) == 1
+
+        with open(log_files[0], 'r') as f:
+            content = f.read()
+            # 应该包含所有线程的消息
+            for i in range(5):
+                assert f"Thread {i}:" in content
