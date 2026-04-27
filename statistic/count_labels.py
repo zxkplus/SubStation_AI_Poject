@@ -312,8 +312,17 @@ def _find_image_for_annotation(annotation_path: str):
     return None
 
 
-def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, show_progress: bool = True, resume: bool = True):
-    """将图片和对应标注文件按类别创建符号链接到目标目录。支持中断后继续运行。"""
+def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, show_progress: bool = True, resume: bool = True, use_symlink: bool = True):
+    """将图片和对应标注文件按类别创建符号链接或复制到目标目录。支持中断后继续运行。
+    
+    Args:
+        root_dir: 源数据集根目录
+        target_dir: 目标目录
+        ignore_labels: 要忽略的标签列表
+        show_progress: 是否显示进度条
+        resume: 是否从上次中断处继续
+        use_symlink: 是否使用符号链接(True)或复制(False)
+    """
     if ignore_labels is None:
         ignore_labels = ['通用-不识别']
 
@@ -365,25 +374,27 @@ def copy_dataset_by_label(root_dir: str, target_dir: str, ignore_labels=None, sh
         dest_annotation = _resolve_unique_path(os.path.join(dest_dir, os.path.basename(filepath)))
 
         try:
-            if _safe_path_exists(dest_image) and _safe_path_islink(dest_image) and _safe_readlink(dest_image) == image_path:
-                pass
-            else:
-                if _safe_path_exists(dest_image):
-                    try:
-                        dest_image.unlink()
-                    except OSError:
-                        return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_image}"
+            if _safe_path_exists(dest_image):
+                try:
+                    dest_image.unlink()
+                except OSError:
+                    return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_image}"
+            
+            if use_symlink:
                 _create_symlink(image_path, str(dest_image))
-
-            if _safe_path_exists(dest_annotation) and _safe_path_islink(dest_annotation) and _safe_readlink(dest_annotation) == filepath:
-                pass
             else:
-                if _safe_path_exists(dest_annotation):
-                    try:
-                        dest_annotation.unlink()
-                    except OSError:
-                        return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_annotation}"
+                shutil.copy2(image_path, str(dest_image))
+
+            if _safe_path_exists(dest_annotation):
+                try:
+                    dest_annotation.unlink()
+                except OSError:
+                    return 'skipped', category, f"{filepath} -> 无法删除目标文件 {dest_annotation}"
+            
+            if use_symlink:
                 _create_symlink(filepath, str(dest_annotation))
+            else:
+                shutil.copy2(filepath, str(dest_annotation))
 
             _append_completed_annotation(progress_file, annotation_path)
             completed_annotations.add(annotation_path)
@@ -476,7 +487,6 @@ def count_labels(root_dir: str, max_workers: int = None, output_file: str = None
     if output_file is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file = f"label_statistics_{timestamp}.txt"
-
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write("==================== 数据集标注类别统计报告 ====================\n")
         f.write(f"统计时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -597,6 +607,8 @@ if __name__ == "__main__":
                         help="每个类别采样的样本数量（默认10）")
     parser.add_argument("--copy-dir", type=str, default=None,
                         help="将图片和标注文件按类别创建符号链接到目标目录，忽略 通用-不识别 类别")
+    parser.add_argument("--use-copy", action="store_true",
+                        help="使用实际复制而非符号链接（与--copy-dir一起使用）")
 
     args = parser.parse_args()
 
@@ -607,5 +619,6 @@ if __name__ == "__main__":
             args.root_dir,
             args.copy_dir,
             ignore_labels=['通用-不识别'],
-            show_progress=True
+            show_progress=True,
+            use_symlink=not args.use_copy
         )
