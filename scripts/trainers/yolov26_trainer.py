@@ -8,6 +8,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 import yaml
+import subprocess
 
 # 添加父目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -73,24 +74,28 @@ class YOLO26Trainer(BaseTrainer):
         """
         from ultralytics import YOLO
 
+        # 如果提供了权重路径且文件存在，则使用该路径
         if weights_path and Path(weights_path).exists():
             logger.info(f"加载自定义权重: {weights_path}")
-            model = YOLO(weights_path)
+            model = YOLO(weights_path, task='segment')
+            # 更新模型名称为实际使用的权重文件
+            self.model_name = Path(weights_path).name
+        elif weights_path:
+            # 如果提供了权重路径但文件不存在，抛出错误
+            logger.error(f"权重文件不存在: {weights_path}")
+            raise FileNotFoundError(f"权重文件不存在: {weights_path}")
         else:
             # 检查模型名是否是有效的预训练模型标识符
-            # 如果不是本地文件，则直接传入模型名称让ultralytics处理
-            if self.model_name.endswith('.pt') and not Path(self.model_name).exists():
-                logger.info(f"加载预训练模型: {self.model_name} (将由ultralytics自动下载)")
-                try:
-                    model = YOLO(self.model_name)
-                except FileNotFoundError:
-                    # 如果指定的模型文件不存在，尝试使用基础模型名
-                    base_model_name = self.model_name.replace('.pt', '')
-                    logger.info(f"自动回退到模型类型: {base_model_name}")
-                    model = YOLO(f"{base_model_name}")
-            else:
-                logger.info(f"加载预训练模型: {self.model_name}")
-                model = YOLO(self.model_name)
+            # Ultralytics可以直接处理如'yolo26s-seg'这样的模型名并自动下载
+            logger.info(f"加载预训练模型: {self.model_name}")
+            try:
+                # 直接使用模型名称，让ultralytics处理
+                model = YOLO(self.model_name, task='segment')
+            except FileNotFoundError:
+                # 如果指定的模型文件不存在，尝试去掉.pt后缀
+                base_model_name = self.model_name.replace('.pt', '')
+                logger.info(f"自动回退到模型类型: {base_model_name}")
+                model = YOLO(base_model_name, task='segment')
 
         return model
 
@@ -106,6 +111,31 @@ class YOLO26Trainer(BaseTrainer):
         optimizer: str = 'auto',
         lr0: float = 0.01,
         patience: int = 50,
+        momentum: float = 0.937,
+        weight_decay: float = 0.0005,
+        warmup_epochs: int = 3,
+        warmup_momentum: float = 0.8,
+        warmup_bias_lr: float = 0.1,
+        hsv_h: float = 0.015,
+        hsv_s: float = 0.7,
+        hsv_v: float = 0.4,
+        degrees: float = 0.0,
+        translate: float = 0.1,
+        scale: float = 0.5,
+        shear: float = 0.0,
+        perspective: float = 0.0,
+        flipud: float = 0.0,
+        fliplr: float = 0.5,
+        mosaic: float = 1.0,
+        mixup: float = 0.0,
+        copy_paste: float = 0.0,
+        box: float = 7.5,
+        cls: float = 0.5,
+        dfl: float = 1.5,
+        pose: float = 1.0,
+        conf_thres: float = 0.001,
+        iou_thres: float = 0.6,
+        max_det: int = 300,
         **kwargs
     ):
         """
@@ -132,66 +162,109 @@ class YOLO26Trainer(BaseTrainer):
         logger.info(f"模型: {self.model_name}")
         logger.info(f"Epochs: {epochs}, Batch Size: {batch_size}, Image Size: {img_size}")
 
-        try:
-            # 加载模型
-            model = self._load_model(weights_path=resume)
+        # 尝试训练，如果出现CUDA内存不足的情况，自动减少批次大小
+        batch_sizes_to_try = [batch_size]
+        if batch_size > 1:
+            # 生成递减的批次大小列表，每次减半直到最小为1
+            temp_batch_size = batch_size // 2
+            while temp_batch_size >= 1:
+                batch_sizes_to_try.append(temp_batch_size)
+                temp_batch_size //= 2
+        
+        logger.info(f"尝试的批次大小序列: {batch_sizes_to_try}")
 
-            # 训练参数
-            train_args = {
-                'data': str(self.data_config_path),
-                'epochs': epochs,
-                'batch': batch_size,
-                'imgsz': img_size,
-                'workers': workers,
-                'device': device,
-                'project': str(self.output_dir),
-                'name': name,
-                'exist_ok': True,
-                'verbose': True,
-                'optimizer': optimizer,
-                'lr0': lr0,
-                'patience': patience,
-                'task': 'segment',  # 实例分割任务
-                'amp': False,  # 禁用自动混合精度检查，避免寻找yolo26n.pt文件
-            }
+        for idx, current_batch_size in enumerate(batch_sizes_to_try):
+            try:
+                # 加载模型
+                model = self._load_model(weights_path=resume)
 
-            # 添加额外参数
-            if 'mosaic' in kwargs:
-                train_args['mosaic'] = kwargs['mosaic']
-            if 'mixup' in kwargs:
-                train_args['mixup'] = kwargs['mixup']
-            if 'hsv_h' in kwargs:
-                train_args['hsv_h'] = kwargs['hsv_h']
-            if 'hsv_s' in kwargs:
-                train_args['hsv_s'] = kwargs['hsv_s']
-            if 'hsv_v' in kwargs:
-                train_args['hsv_v'] = kwargs['hsv_v']
-            if 'degrees' in kwargs:
-                train_args['degrees'] = kwargs['degrees']
-            if 'translate' in kwargs:
-                train_args['translate'] = kwargs['translate']
-            if 'scale' in kwargs:
-                train_args['scale'] = kwargs['scale']
-            if 'fliplr' in kwargs:
-                train_args['fliplr'] = kwargs['fliplr']
-            if 'flipud' in kwargs:
-                train_args['flipud'] = kwargs['flipud']
-            if 'mosaic' in kwargs:
-                train_args['mosaic'] = kwargs['mosaic']
-            if 'pretrained' in kwargs:
-                train_args['pretrained'] = kwargs['pretrained']
+                # 训练参数
+                train_args = {
+                    'data': str(self.data_config_path),
+                    'epochs': epochs,
+                    'batch': current_batch_size,
+                    'imgsz': img_size,
+                    'workers': workers,
+                    'device': device,
+                    'project': str(self.output_dir),
+                    'name': name,
+                    'exist_ok': True,
+                    'verbose': True,
+                    'optimizer': optimizer,
+                    'lr0': lr0,
+                    'patience': patience,
+                    'task': 'segment',  # 实例分割任务
+                    'amp': False,  # 禁用自动混合精度检查，避免寻找yolo26n.pt文件
+                    'momentum': momentum,
+                    'weight_decay': weight_decay,
+                    'warmup_epochs': warmup_epochs,
+                    'warmup_momentum': warmup_momentum,
+                    'warmup_bias_lr': warmup_bias_lr,
+                    'box': box,
+                    'cls': cls,
+                    'dfl': dfl,
+                    'pose': pose,  # 在实例分割中，这控制mask损失
+                    'conf': conf_thres,  # 新版本ultralytics使用'conf'而不是'conf_thres'
+                    'iou': iou_thres,   # 新版本ultralytics使用'iou'而不是'iou_thres'
+                    'max_det': max_det
+                }
 
-            # 开始训练
-            results = model.train(**train_args)
+                # 添加额外参数
+                if 'mosaic' in kwargs:
+                    train_args['mosaic'] = kwargs['mosaic']
+                if 'mixup' in kwargs:
+                    train_args['mixup'] = kwargs['mixup']
+                if 'hsv_h' in kwargs:
+                    train_args['hsv_h'] = kwargs['hsv_h']
+                if 'hsv_s' in kwargs:
+                    train_args['hsv_s'] = kwargs['hsv_s']
+                if 'hsv_v' in kwargs:
+                    train_args['hsv_v'] = kwargs['hsv_v']
+                if 'degrees' in kwargs:
+                    train_args['degrees'] = kwargs['degrees']
+                if 'translate' in kwargs:
+                    train_args['translate'] = kwargs['translate']
+                if 'scale' in kwargs:
+                    train_args['scale'] = kwargs['scale']
+                if 'fliplr' in kwargs:
+                    train_args['fliplr'] = kwargs['fliplr']
+                if 'flipud' in kwargs:
+                    train_args['flipud'] = kwargs['flipud']
+                if 'mosaic' in kwargs:
+                    train_args['mosaic'] = kwargs['mosaic']
+                if 'pretrained' in kwargs:
+                    train_args['pretrained'] = kwargs['pretrained']
+                if 'lrf' in kwargs:
+                    train_args['lrf'] = kwargs['lrf']
 
-            logger.info("训练完成")
-            logger.info(f"最佳模型保存在: {self.output_dir / name / 'weights' / 'best.pt'}")
+                logger.info(f"使用批次大小 {current_batch_size} 开始训练...")
 
-            return results
+                # 开始训练
+                results = model.train(**train_args)
 
-        except Exception as e:
-            logger.error(f"训练失败: {e}", exc_info=True)
-            raise
+                logger.info("训练完成")
+                logger.info(f"最佳模型保存在: {self.output_dir / name / 'weights' / 'best.pt'}")
+
+                return results
+
+            except Exception as e:
+                # 检查是否是CUDA内存不足错误
+                if "CUDA out of memory" in str(e) or "out of memory" in str(e):
+                    if idx < len(batch_sizes_to_try) - 1:
+                        logger.warning(f"CUDA内存不足，批次大小 {current_batch_size} 无法运行。尝试减少批次大小至 {batch_sizes_to_try[idx + 1]}")
+                        continue  # 尝试下一个较小的批次大小
+                    else:
+                        logger.error(f"即使是最小批次大小 {current_batch_size} 也无法运行，CUDA内存不足。")
+                        raise
+                else:
+                    # 如果不是CUDA内存错误，直接抛出异常
+                    logger.error(f"训练失败: {e}", exc_info=True)
+                    raise
+
+        logger.info("训练完成")
+        logger.info(f"最佳模型保存在: {self.output_dir / name / 'weights' / 'best.pt'}")
+
+        return results
 
     def validate(
         self,

@@ -318,7 +318,7 @@ def main():
                         help='训练轮数')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='批次大小')
-    parser.add_argument('--img_size', type=int, default=640,
+    parser.add_argument('--img_size', type=int, default=None,  # 修改默认值为None，以便从配置文件读取
                         help='输入图片尺寸')
     parser.add_argument('--device', type=str, default='0',
                         help='设备ID，0表示GPU0，-1表示CPU')
@@ -336,6 +336,23 @@ def main():
     parser.add_argument('--model_size', type=str, default='s',
                         choices=['n', 's', 'm', 'l', 'x'],
                         help='YOLO26模型尺寸（仅适用于yolo26）')
+    parser.add_argument('--optimizer', type=str, default='auto',
+                        choices=['auto', 'SGD', 'Adam', 'AdamW', 'RMSProp'],
+                        help='优化器类型')
+    parser.add_argument('--lr0', type=float, default=0.01,
+                        help='初始学习率')
+    parser.add_argument('--momentum', type=float, default=0.937,
+                        help='动量参数')
+    parser.add_argument('--weight_decay', type=float, default=0.0005,
+                        help='权重衰减（L2正则化）')
+    parser.add_argument('--warmup_epochs', type=int, default=3,
+                        help='预热轮数')
+    parser.add_argument('--warmup_momentum', type=float, default=0.8,
+                        help='预热阶段动量')
+    parser.add_argument('--warmup_bias_lr', type=float, default=0.1,
+                        help='预热阶段偏置学习率')
+    parser.add_argument('--patience', type=int, default=50,
+                        help='早停耐心值')
 
     args = parser.parse_args()
 
@@ -361,6 +378,70 @@ def main():
         if args.model_config:
             model_config = load_config(args.model_config)
 
+        # 从模型配置中提取训练参数（如果命令行未指定）
+        if model_config:
+            training_config = model_config.get('training', {})
+            augmentation_config = model_config.get('augmentation', {})
+            
+            # 只有当命令行未指定时，才从配置文件获取这些参数
+            if args.img_size is None:
+                args.img_size = training_config.get('img_size', 640)
+            if args.epochs == 300:  # 检查是否使用默认值
+                args.epochs = training_config.get('epochs', 300)
+            if args.batch_size == 32:  # 检查是否使用默认值
+                args.batch_size = training_config.get('batch_size', 32)
+            if args.optimizer == 'auto':  # 检查是否使用默认值
+                args.optimizer = training_config.get('optimizer', 'auto')
+            if args.lr0 == 0.01:  # 检查是否使用默认值
+                args.lr0 = training_config.get('lr0', 0.01)
+            if args.momentum == 0.937:  # 检查是否使用默认值
+                args.momentum = training_config.get('momentum', 0.937)
+            if args.weight_decay == 0.0005:  # 检查是否使用默认值
+                args.weight_decay = training_config.get('weight_decay', 0.0005)
+            if args.warmup_epochs == 3:  # 检查是否使用默认值
+                args.warmup_epochs = training_config.get('warmup_epochs', 3)
+            if args.warmup_momentum == 0.8:  # 检查是否使用默认值
+                args.warmup_momentum = training_config.get('warmup_momentum', 0.8)
+            if args.warmup_bias_lr == 0.1:  # 检查是否使用默认值
+                args.warmup_bias_lr = training_config.get('warmup_bias_lr', 0.1)
+            if args.patience == 50:  # 检查是否使用默认值
+                args.patience = training_config.get('patience', 50)
+
+            # 从配置文件获取数据增强参数
+            # 将增强参数存储到args中，以便后续传递给训练器
+            args.hsv_h = augmentation_config.get('hsv_h', 0.015)
+            args.hsv_s = augmentation_config.get('hsv_s', 0.7)
+            args.hsv_v = augmentation_config.get('hsv_v', 0.4)
+            args.degrees = augmentation_config.get('degrees', 0.0)
+            args.translate = augmentation_config.get('translate', 0.1)
+            args.scale = augmentation_config.get('scale', 0.5)
+            args.shear = augmentation_config.get('shear', 0.0)
+            args.perspective = augmentation_config.get('perspective', 0.0)
+            args.flipud = augmentation_config.get('flipud', 0.0)
+            args.fliplr = augmentation_config.get('fliplr', 0.5)
+            args.mosaic = augmentation_config.get('mosaic', 1.0)
+            args.mixup = augmentation_config.get('mixup', 0.0)
+            args.copy_paste = augmentation_config.get('copy_paste', 0.0)
+
+            # 从配置文件获取损失函数权重参数
+            loss_config = model_config.get('loss', {})
+            args.box_loss = loss_config.get('box', 7.5)
+            args.cls_loss = loss_config.get('cls', 0.5)
+            args.dfl_loss = loss_config.get('dfl', 1.5)
+            args.mask_loss = loss_config.get('mask', 1.0)
+
+            # 从配置文件获取验证参数
+            validation_config = model_config.get('validation', {})
+            args.conf_thres = validation_config.get('conf_thres', 0.001)
+            args.iou_thres = validation_config.get('iou_thres', 0.6)
+            args.max_det = validation_config.get('max_det', 300)
+
+        # 如果命令行和配置文件都没有设置img_size，则使用默认值640
+        if args.img_size is None:
+            args.img_size = 640
+
+        logger.info(f"使用参数: epochs={args.epochs}, batch_size={args.batch_size}, img_size={args.img_size}")
+
         # 创建训练器
         trainer_class = TRAINER_REGISTRY[args.yolo_version]
         trainer_kwargs = {
@@ -384,7 +465,35 @@ def main():
                 img_size=args.img_size,
                 resume=args.resume,
                 workers=args.workers,
-                name=args.name
+                name=args.name,
+                optimizer=args.optimizer,
+                lr0=args.lr0,
+                patience=args.patience,
+                momentum=args.momentum,
+                weight_decay=args.weight_decay,
+                warmup_epochs=args.warmup_epochs,
+                warmup_momentum=args.warmup_momentum,
+                warmup_bias_lr=args.warmup_bias_lr,
+                hsv_h=args.hsv_h,
+                hsv_s=args.hsv_s,
+                hsv_v=args.hsv_v,
+                degrees=args.degrees,
+                translate=args.translate,
+                scale=args.scale,
+                shear=args.shear,
+                perspective=args.perspective,
+                flipud=args.flipud,
+                fliplr=args.fliplr,
+                mosaic=args.mosaic,
+                mixup=args.mixup,
+                copy_paste=args.copy_paste,
+                box=args.box_loss,
+                cls=args.cls_loss,
+                dfl=args.dfl_loss,
+                pose=args.mask_loss,  # ultralytics中mask损失可能使用pose参数
+                conf_thres=args.conf_thres,
+                iou_thres=args.iou_thres,
+                max_det=args.max_det
             )
         elif args.mode == 'val':
             if args.weights is None:
