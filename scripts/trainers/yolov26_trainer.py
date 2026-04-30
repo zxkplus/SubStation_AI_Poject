@@ -7,6 +7,7 @@ import sys
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
+import yaml
 
 # 添加父目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -278,7 +279,7 @@ class YOLO26Trainer(BaseTrainer):
             # 加载模型
             model = self._load_model(weights_path=weights_path)
 
-            # 测试参数（使用测试集）
+            # 尝试使用测试集，如果不存在则使用验证集
             test_args = {
                 'data': str(self.data_config_path),
                 'batch': batch_size,
@@ -286,8 +287,18 @@ class YOLO26Trainer(BaseTrainer):
                 'conf': conf,
                 'iou': iou,
                 'device': device,
-                'split': 'test',  # 使用测试集
             }
+            
+            # 检查数据配置中是否存在test字段
+            with open(self.data_config_path, 'r') as f:
+                data_config = yaml.safe_load(f)
+            
+            if data_config.get('test'):
+                test_args['split'] = 'test'  # 如果存在test字段则使用test集
+                logger.info("使用测试集进行评估")
+            else:
+                test_args['split'] = 'val'  # 否则使用验证集
+                logger.info("未找到测试集，使用验证集进行评估")
 
             # 开始测试
             results = model.val(**test_args)
