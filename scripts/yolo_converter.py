@@ -159,9 +159,9 @@ class DatasetConverter:
         json_path: str,
         expand_ratio: float = 0.0,
         min_size: int = 32
-    ) -> Optional[Tuple[np.ndarray, List[Tuple[List[List[float]], str]], Tuple[int, int, int, int], dict]]:
+    ) -> Optional[List[Tuple[np.ndarray, List[Tuple[List[List[float]], str]], Tuple[int, int, int, int], dict]]]:
         """
-        裁剪图片并转换标注（计算联合bbox，变换坐标）
+        裁剪图片并转换标注（每个polygon单独裁剪，变换坐标）
         
         Args:
             img_path: 图片路径
@@ -170,7 +170,7 @@ class DatasetConverter:
             min_size: 最小裁剪尺寸，低于此尺寸的mask将被跳过
             
         Returns:
-            (裁剪图片, [(变换后polygon, label), ...], 联合bbox, 原始json_data) 或 None
+            List of (裁剪图片, [(变换后polygon, label), ...], 单个polygon的bbox, 原始json_data) 或 None
         """
         # 加载图片
         img = cv2.imread(img_path)
@@ -189,54 +189,48 @@ class DatasetConverter:
         if not polygons_with_labels:
             return None
         
-        # 计算联合bbox
-        all_x_coords = []
-        all_y_coords = []
-        valid_polygons = []
+        # 为每个有效的polygon创建单独的裁剪结果
+        results = []
         
         for polygon, label in polygons_with_labels:
             # 检查最小尺寸
             x, y, w, h = self.get_mask_bbox(polygon)
             if w < min_size or h < min_size:
                 continue
-            all_x_coords.extend([p[0] for p in polygon])
-            all_y_coords.extend([p[1] for p in polygon])
-            valid_polygons.append((polygon, label))
-        
-        if not valid_polygons:
-            return None
-        
-        # 联合bbox
-        x_min = int(min(all_x_coords))
-        y_min = int(min(all_y_coords))
-        x_max = int(max(all_x_coords))
-        y_max = int(max(all_y_coords))
-        w = x_max - x_min + 1
-        h = y_max - y_min + 1
-        
-        # 扩展边界框
-        if expand_ratio > 0:
-            expand_w = int(w * expand_ratio)
-            expand_h = int(h * expand_ratio)
-            x_min = max(0, x_min - expand_w)
-            y_min = max(0, y_min - expand_h)
-            w = min(img_width - x_min, w + 2 * expand_w)
-            h = min(img_height - y_min, h + 2 * expand_h)
-        
-        # 裁剪图片
-        cropped_img = img[y_min:y_min+h, x_min:x_min+w]
-        
-        # 变换polygons坐标
-        transformed_polygons = []
-        for polygon, label in valid_polygons:
+                
+            # 计算当前polygon的边界框
+            x_min = x
+            y_min = y
+            width = w
+            height = h
+            
+            # 扩展边界框
+            if expand_ratio > 0:
+                expand_w = int(width * expand_ratio)
+                expand_h = int(height * expand_ratio)
+                x_min = max(0, x_min - expand_w)
+                y_min = max(0, y_min - expand_h)
+                width = min(img_width - x_min, width + 2 * expand_w)
+                height = min(img_height - y_min, height + 2 * expand_h)
+            
+            # 裁剪图片
+            cropped_img = img[y_min:y_min+height, x_min:x_min+width]
+            
+            # 变换polygon坐标
+            transformed_polygons = []
             new_polygon = []
             for point in polygon:
                 new_x = point[0] - x_min
                 new_y = point[1] - y_min
                 new_polygon.append([new_x, new_y])
             transformed_polygons.append((new_polygon, label))
+            
+            results.append((cropped_img, transformed_polygons, (x_min, y_min, width, height), json_data))
         
-        return cropped_img, transformed_polygons, (x_min, y_min, w, h), json_data
+        if not results:
+            return None
+        
+        return results
     
     def _process_single_image(
         self,
@@ -260,74 +254,75 @@ class DatasetConverter:
         class_dist = defaultdict(int)
         processed_names = []
         
-        # 裁剪并转换
-        result = self.crop_and_convert(
+        # 裁剪并转换 - 现在返回每个polygon的结果列表
+        results = self.crop_and_convert(
             img_path, json_path,
             expand_ratio=expand_ratio,
             min_size=min_size
         )
         
-        if result is None:
+        if results is None:
             skipped = 1
             return converted, skipped, masks, dict(class_dist), processed_names
-        
-        cropped_img, transformed_polygons, bbox, original_json_data = result
-        
-        converted = 1
-        masks = len(transformed_polygons)
-        for _, label in transformed_polygons:
-            class_dist[label] += 1
         
         base_name = Path(img_path).stem
         
-        # 生成唯一文件名
-        output_name = f"{base_name_prefix}{base_name}"
-        processed_names.append(output_name)
-        
-        # 保存裁剪图片
-        img_output_path = category_img_dir / f"{output_name}.jpg"
-        if not cv2.imwrite(str(img_output_path), cropped_img):
-            print(f"    图片保存失败: {img_output_path}")
-            skipped = 1
-            return converted, skipped, masks, dict(class_dist), processed_names
-        
-        # 获取裁剪后图片尺寸
-        crop_width = cropped_img.shape[1]
-        crop_height = cropped_img.shape[0]
-        
-        # 生成JSON标注（保留原始字段，更新相关信息）
-        json_data = original_json_data.copy()
-        
-        # 更新图片相关信息
-        json_data["imagePath"] = f"{output_name}.jpg"
-        json_data["imageWidth"] = crop_width
-        json_data["imageHeight"] = crop_height
-        json_data["imageData"] = None
-        
-        # 更新meta中的图片尺寸（LabelMe会优先使用meta字段）
-        if "meta" in json_data:
-            json_data["meta"]["width"] = crop_width
-            json_data["meta"]["height"] = crop_height
-        
-        # 更新shapes（使用变换后的polygons）
-        json_data["shapes"] = []
-        for polygon, label in transformed_polygons:
-            shape = {
-                "label": label,
-                "shape_type": "polygon",
-                "points": polygon
-            }
-            json_data["shapes"].append(shape)
-        
-        # 保存JSON文件
-        label_output_path = category_label_dir / f"{output_name}.json"
-        with open(label_output_path, 'w', encoding='utf-8') as f:
-            json.dump(json_data, f, ensure_ascii=False, indent=2)
-        
-        # 记录尺寸信息
-        with self._lock:
+        # 遍历每个polygon的结果
+        for idx, (cropped_img, transformed_polygons, bbox, original_json_data) in enumerate(results):
+            # 为每个polygon生成唯一的输出名称
+            output_name = f"{base_name_prefix}{base_name}_{idx+1}"
+            processed_names.append(output_name)
+            
+            # 保存裁剪图片
+            img_output_path = category_img_dir / f"{output_name}.jpg"
+            if not cv2.imwrite(str(img_output_path), cropped_img):
+                print(f"    图片保存失败: {img_output_path}")
+                skipped += 1
+                continue  # 处理下一个polygon
+            
+            # 获取裁剪后图片尺寸
+            crop_width = cropped_img.shape[1]
+            crop_height = cropped_img.shape[0]
+            
+            # 生成JSON标注（保留原始字段，更新相关信息）
+            json_data = original_json_data.copy()
+            
+            # 更新图片相关信息
+            json_data["imagePath"] = f"{output_name}.jpg"
+            json_data["imageWidth"] = crop_width
+            json_data["imageHeight"] = crop_height
+            json_data["imageData"] = None
+            
+            # 更新meta中的图片尺寸（LabelMe会优先使用meta字段）
+            if "meta" in json_data:
+                json_data["meta"]["width"] = crop_width
+                json_data["meta"]["height"] = crop_height
+            
+            # 更新shapes（使用变换后的polygons）
+            json_data["shapes"] = []
+            for polygon, label in transformed_polygons:
+                shape = {
+                    "label": label,
+                    "shape_type": "polygon",
+                    "points": polygon
+                }
+                json_data["shapes"].append(shape)
+            
+            # 保存JSON文件
+            label_output_path = category_label_dir / f"{output_name}.json"
+            with open(label_output_path, 'w', encoding='utf-8') as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2)
+            
+            # 更新统计信息
+            converted += 1
+            masks += len(transformed_polygons)
             for _, label in transformed_polygons:
-                self.stats['image_sizes'][label].append((crop_width, crop_height))
+                class_dist[label] += 1
+            
+            # 记录尺寸信息
+            with self._lock:
+                for _, label in transformed_polygons:
+                    self.stats['image_sizes'][label].append((crop_width, crop_height))
         
         return converted, skipped, masks, dict(class_dist), processed_names
     
