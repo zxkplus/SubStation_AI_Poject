@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from data_loader import DatasetLoader
 from statistics import DatasetStats
 from visualization import MaskVisualizer
-from yolo_converter import DatasetConverter
 
 
 def main():
@@ -100,20 +99,18 @@ def main():
     
     try:
         if args.mode in ['yolo', 'convert']:
-            # 数据集转换模式
-            from yolo_converter import DatasetConverter
-            
-            if not args.output_yolo_path:
-                # 默认输出到输入目录的同级converted_dataset文件夹
-                parent_dir = os.path.dirname(os.path.abspath(args.dataset_path))
-                args.output_yolo_path = os.path.join(parent_dir, 'converted_dataset')
-            
-            converter = DatasetConverter(args.dataset_path, args.output_yolo_path)
-            
-            # 根据模式设置参数
             if args.mode == 'convert':
+                # convert模式：裁剪和JSON格式转换
+                from dataset_cropper import DatasetCropper
+                if not args.output_yolo_path:
+                    # 默认输出到输入目录的同级converted_dataset文件夹
+                    parent_dir = os.path.dirname(os.path.abspath(args.dataset_path))
+                    args.output_yolo_path = os.path.join(parent_dir, 'converted_dataset')
+                
+                cropper = DatasetCropper(args.dataset_path, args.output_yolo_path)
+                
                 # convert模式：不创建子目录，每个类别转换100张
-                converter.convert_dataset(
+                cropper.convert_dataset(
                     samples_per_class=100,
                     expand_ratio=args.expand_ratio,
                     min_size=args.min_size,
@@ -122,11 +119,19 @@ def main():
                     num_workers=args.num_workers
                 )
             else:
-                # yolo模式：创建子目录，使用指定的samples_per_class
-                converter.convert_dataset(
-                    samples_per_class=args.samples_per_class,
-                    expand_ratio=args.expand_ratio,
-                    min_size=args.min_size,
+                # yolo模式：转换为YOLO格式
+                from yolo_formatter import YOLOFormatter
+                if not args.output_yolo_path:
+                    # 默认输出到输入目录的同级yolo_dataset文件夹
+                    parent_dir = os.path.dirname(os.path.abspath(args.dataset_path))
+                    args.output_yolo_path = os.path.join(parent_dir, 'yolo_dataset')
+                
+                formatter = YOLOFormatter(args.dataset_path, args.output_yolo_path)
+                
+                # yolo模式：转换为YOLO格式，划分数据集
+                formatter.format_dataset(
+                    train_ratio=0.8,
+                    val_ratio=0.1,
                     num_workers=args.num_workers
                 )
         
