@@ -61,25 +61,44 @@ class YOLOValidator:
         """
         dataset_structure = defaultdict(lambda: {'images': [], 'labels': []})
         
-        # 遍历所有类别目录
-        for category_dir in self.yolo_path.iterdir():
-            if not category_dir.is_dir() or category_dir.name == 'classes.txt':
-                continue
-            
-            category_name = category_dir.name
-            images_dir = category_dir / 'images'
-            labels_dir = category_dir / 'labels'
-            
-            if not images_dir.exists() or not labels_dir.exists():
-                continue
-            
-            # 加载图片和标签
-            for img_file in images_dir.iterdir():
-                if img_file.suffix.lower() in self.image_formats:
-                    label_file = labels_dir / (img_file.stem + '.txt')
-                    if label_file.exists():
-                        dataset_structure[category_name]['images'].append(str(img_file))
-                        dataset_structure[category_name]['labels'].append(str(label_file))
+        # 检查是否是按类别组织的结构
+        category_dirs = [d for d in self.yolo_path.iterdir() 
+                        if d.is_dir() and d.name not in ['images', 'labels', 'train', 'val', 'test']]
+        
+        if category_dirs:
+            # 按类别组织的结构
+            for category_dir in category_dirs:
+                category_name = category_dir.name
+                images_dir = category_dir / 'images'
+                labels_dir = category_dir / 'labels'
+                
+                if not images_dir.exists() or not labels_dir.exists():
+                    continue
+                
+                # 加载图片和标签
+                for img_file in images_dir.iterdir():
+                    if img_file.suffix.lower() in self.image_formats:
+                        label_file = labels_dir / (img_file.stem + '.txt')
+                        if label_file.exists():
+                            dataset_structure[category_name]['images'].append(str(img_file))
+                            dataset_structure[category_name]['labels'].append(str(label_file))
+        else:
+            # 检查标准YOLO格式结构 (images/train, labels/train 等)
+            splits = ['train', 'val', 'test']
+            for split in splits:
+                images_dir = self.yolo_path / 'images' / split
+                labels_dir = self.yolo_path / 'labels' / split
+                
+                if not images_dir.exists() or not labels_dir.exists():
+                    continue
+                
+                # 加载图片和标签
+                for img_file in images_dir.iterdir():
+                    if img_file.suffix.lower() in self.image_formats:
+                        label_file = labels_dir / (img_file.stem + '.txt')
+                        if label_file.exists():
+                            dataset_structure[split]['images'].append(str(img_file))
+                            dataset_structure[split]['labels'].append(str(label_file))
         
         return dict(dataset_structure)
     
@@ -272,7 +291,7 @@ class YOLOValidator:
             print("错误: 数据集为空或结构不正确")
             return
         
-        print(f"\n发现 {len(dataset_structure)} 个类别")
+        print(f"\n发现 {len(dataset_structure)} 个数据分区")
         print(f"每类随机选择 {samples_per_class} 张图片")
         print()
         
@@ -285,7 +304,7 @@ class YOLOValidator:
         
         # 验证每个类别
         for category_name, data in dataset_structure.items():
-            print(f"处理类别: {category_name}")
+            print(f"处理分区: {category_name}")
             
             images = data['images']
             labels = data['labels']
@@ -391,8 +410,8 @@ class YOLOValidator:
             f.write(f"数据集路径: {self.yolo_path}\n")
             f.write(f"输出路径: {output_path}\n\n")
             
-            f.write("【类别统计】\n")
-            f.write(f"{'类别名称':<20} {'样本数量':>10}\n")
+            f.write("【数据分区统计】\n")
+            f.write(f"{'分区名称':<20} {'样本数量':>10}\n")
             f.write("-" * 30 + "\n")
             
             total_samples = 0

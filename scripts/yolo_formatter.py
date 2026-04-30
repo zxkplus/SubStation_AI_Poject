@@ -280,23 +280,12 @@ class YOLOFormatter:
     
     def save_data_config(self, dataset_split: Dict[str, List[Tuple[str, str]]]):
         """保存数据集配置文件"""
-        # 创建图像和标签子目录
-        images_dir = self.output_path / 'images'
-        labels_dir = self.output_path / 'labels'
-        images_dir.mkdir(exist_ok=True)
-        labels_dir.mkdir(exist_ok=True)
-        
-        # 为每个分割创建子目录
-        for split_name in dataset_split.keys():
-            (images_dir / split_name).mkdir(exist_ok=True)
-            (labels_dir / split_name).mkdir(exist_ok=True)
-        
-        # 生成数据集配置
+        # 生成数据集配置 - 符合训练脚本期望的路径格式
         data_config = {
-            'path': str(self.output_path.absolute()),
-            'train': 'images/train',  # 相对于path的路径
-            'val': 'images/val',
-            'test': 'images/test' if dataset_split.get('test') else 'images/val',
+            'path': str(self.output_path.absolute()),  # 数据集根目录
+            'train': 'train',  # 相对于path的路径，直接指向train目录
+            'val': 'val',
+            'test': 'test' if dataset_split.get('test') else 'val',
             'nc': len(self.reverse_class_mapping),
             'names': [self.reverse_class_mapping[i] for i in sorted(self.reverse_class_mapping.keys())]
         }
@@ -307,18 +296,16 @@ class YOLOFormatter:
             yaml.safe_dump(data_config, f, default_flow_style=False, allow_unicode=True)
     
     def copy_and_organize_files(self, dataset_split: Dict[str, List[Tuple[str, str]]]):
-        """复制并组织文件到对应目录"""
-        images_dir = self.output_path / 'images'
-        labels_dir = self.output_path / 'labels'
+        """复制并组织文件到对应目录 - 采用训练脚本期望的结构"""
+        import shutil
         
-        # 确保父目录存在
-        images_dir.mkdir(parents=True, exist_ok=True)
-        labels_dir.mkdir(parents=True, exist_ok=True)
-        
+        # 为每个分割创建包含images和labels的子目录
         for split_name, samples in dataset_split.items():
-            split_img_dir = images_dir / split_name
-            split_lbl_dir = labels_dir / split_name
-            split_img_dir.mkdir(exist_ok=True)
+            split_dir = self.output_path / split_name
+            split_img_dir = split_dir / 'images'
+            split_lbl_dir = split_dir / 'labels'
+            
+            split_img_dir.mkdir(parents=True, exist_ok=True)
             split_lbl_dir.mkdir(exist_ok=True)
             
             for img_rel_path, lbl_rel_path in samples:
@@ -326,13 +313,18 @@ class YOLOFormatter:
                 src_img_path = self.input_path / img_rel_path
                 dst_img_name = Path(img_rel_path).name
                 dst_img_path = split_img_dir / dst_img_name
-                dst_img_path.hardlink_to(src_img_path) if dst_img_path != src_img_path else None
+                
+                # 复制图片文件
+                shutil.copy2(src_img_path, dst_img_path)
                 
                 # 复制标签
                 src_lbl_path = self.output_path / lbl_rel_path
                 dst_lbl_name = Path(lbl_rel_path).name
                 dst_lbl_path = split_lbl_dir / dst_lbl_name
-                dst_lbl_path.hardlink_to(src_lbl_path) if dst_lbl_path != src_lbl_path else None
+                
+                # 确保标签文件已存在后再复制
+                if src_lbl_path.exists():
+                    shutil.copy2(src_lbl_path, dst_lbl_path)
     
     def format_dataset(
         self,

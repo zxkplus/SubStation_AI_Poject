@@ -64,11 +64,16 @@ def generate_data_yaml(
     with open(classes_file, 'r', encoding='utf-8') as f:
         classes = [line.strip().split(' ', 1)[1] for line in f if line.strip()]
 
+    # 检查是否存在train/val/test目录结构
+    train_dir = dataset_path / 'train'
+    val_dir = dataset_path / 'val'
+    test_dir = dataset_path / 'test'
+    
+    has_standard_structure = train_dir.exists() and val_dir.exists()
+
     # 构建配置
     config = {
         'path': str(dataset_path.absolute()),
-        'train': 'train',  # 训练集会由prepare_dataset函数创建
-        'val': 'val',      # 验证集会由prepare_dataset函数创建
         'nc': len(classes),
         'names': {i: name for i, name in enumerate(classes)},
         'img_size': 640,
@@ -76,6 +81,17 @@ def generate_data_yaml(
         'batch_size': 32,
         'workers': 8,
     }
+    
+    # 根据数据集结构设置路径
+    if has_standard_structure:
+        config['train'] = 'train'  # 相对于path的路径
+        config['val'] = 'val'
+        if test_dir.exists():
+            config['test'] = 'test'
+    else:
+        # 旧格式，按类别组织
+        config['train'] = 'train'  # 训练集会由prepare_dataset函数创建
+        config['val'] = 'val'      # 验证集会由prepare_dataset函数创建
 
     # 保存配置
     output_path = Path(output_path)
@@ -98,6 +114,9 @@ def prepare_dataset(
 ):
     """
     准备训练数据集，划分训练集和验证集
+    支持两种数据集格式：
+    1. 按类别组织的格式：dataset/class_name/images/, dataset/class_name/labels/
+    2. 标准YOLO格式：dataset/images/train/, dataset/labels/train/
 
     Args:
         dataset_path: YOLO格式数据集路径
@@ -108,6 +127,16 @@ def prepare_dataset(
     import random
 
     dataset_path = Path(dataset_path)
+    
+    # 检查是否已经是标准YOLO格式（存在train/val/test目录）
+    standard_train_img_dir = dataset_path / 'images' / 'train'
+    standard_val_img_dir = dataset_path / 'images' / 'val'
+    
+    if standard_train_img_dir.exists() and standard_val_img_dir.exists():
+        logger.info("检测到标准YOLO格式数据集，无需重新组织")
+        return  # 已经是标准格式，直接返回
+
+    # 如果不是标准格式，则按照原有逻辑处理按类别组织的格式
     train_dir = dataset_path / 'train'
     val_dir = dataset_path / 'val'
 

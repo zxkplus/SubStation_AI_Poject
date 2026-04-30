@@ -76,8 +76,20 @@ class YOLO26Trainer(BaseTrainer):
             logger.info(f"加载自定义权重: {weights_path}")
             model = YOLO(weights_path)
         else:
-            logger.info(f"加载预训练模型: {self.model_name}")
-            model = YOLO(self.model_name)
+            # 检查模型名是否是有效的预训练模型标识符
+            # 如果不是本地文件，则直接传入模型名称让ultralytics处理
+            if self.model_name.endswith('.pt') and not Path(self.model_name).exists():
+                logger.info(f"加载预训练模型: {self.model_name} (将由ultralytics自动下载)")
+                try:
+                    model = YOLO(self.model_name)
+                except FileNotFoundError:
+                    # 如果指定的模型文件不存在，尝试使用基础模型名
+                    base_model_name = self.model_name.replace('.pt', '')
+                    logger.info(f"自动回退到模型类型: {base_model_name}")
+                    model = YOLO(f"{base_model_name}")
+            else:
+                logger.info(f"加载预训练模型: {self.model_name}")
+                model = YOLO(self.model_name)
 
         return model
 
@@ -139,6 +151,7 @@ class YOLO26Trainer(BaseTrainer):
                 'lr0': lr0,
                 'patience': patience,
                 'task': 'segment',  # 实例分割任务
+                'amp': False,  # 禁用自动混合精度检查，避免寻找yolo26n.pt文件
             }
 
             # 添加额外参数
