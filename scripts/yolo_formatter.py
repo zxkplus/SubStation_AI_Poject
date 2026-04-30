@@ -300,14 +300,15 @@ class YOLOFormatter:
         import shutil
         
         # 为每个分割创建包含images和labels的子目录
+        # 结构: dataset_path/train/images, dataset_path/train/labels, 等等
         for split_name, samples in dataset_split.items():
-            split_dir = self.output_path / split_name
-            split_img_dir = split_dir / 'images'
-            split_lbl_dir = split_dir / 'labels'
+            split_img_dir = self.output_path / split_name / 'images'
+            split_lbl_dir = self.output_path / split_name / 'labels'
             
             split_img_dir.mkdir(parents=True, exist_ok=True)
             split_lbl_dir.mkdir(exist_ok=True)
             
+            # 对于当前split，复制其所有图片和标签
             for img_rel_path, lbl_rel_path in samples:
                 # 复制图片
                 src_img_path = self.input_path / img_rel_path
@@ -466,13 +467,14 @@ class YOLOFormatter:
         print(f"  {self.output_path}/")
         print(f"  ├── classes.txt          # 类别映射文件")
         print(f"  ├── data.yaml            # YOLO数据集配置文件")
-        print(f"  ├── images/")
-        print(f"  │   ├── train/           # 训练集图片")
-        print(f"  │   ├── val/             # 验证集图片")
-        print(f"  │   └── test/            # 测试集图片")
-        print(f"  └── labels/")
-        print(f"      ├── train/           # 训练集标签")
-        print(f"      ├── val/             # 验证集标签")
-        print(f"      └── test/            # 测试集标签")
+        print(f"  ├── train/")
+        print(f"  │   ├── images/          # 训练集图片")
+        print(f"  │   └── labels/          # 训练集标签")
+        print(f"  ├── val/")
+        print(f"  │   ├── images/          # 验证集图片")
+        print(f"  │   └── labels/          # 验证集标签")
+        print(f"  └── test/")
+        print(f"      ├── images/          # 测试集图片")
+        print(f"      └── labels/          # 测试集标签")
         
         print("\n" + "=" * 60)

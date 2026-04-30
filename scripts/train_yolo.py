@@ -114,9 +114,10 @@ def prepare_dataset(
 ):
     """
     准备训练数据集，划分训练集和验证集
-    支持两种数据集格式：
+    支持三种数据集格式：
     1. 按类别组织的格式：dataset/class_name/images/, dataset/class_name/labels/
     2. 标准YOLO格式：dataset/images/train/, dataset/labels/train/
+    3. 由yolo_formatter.py生成的格式：dataset/train/images/, dataset/val/images/, dataset/test/images/
 
     Args:
         dataset_path: YOLO格式数据集路径
@@ -128,13 +129,102 @@ def prepare_dataset(
 
     dataset_path = Path(dataset_path)
     
-    # 检查是否已经是标准YOLO格式（存在train/val/test目录）
+    # 检查是否已经是标准YOLO格式（存在images/train和images/val目录）
     standard_train_img_dir = dataset_path / 'images' / 'train'
     standard_val_img_dir = dataset_path / 'images' / 'val'
+    standard_test_img_dir = dataset_path / 'images' / 'test'
     
     if standard_train_img_dir.exists() and standard_val_img_dir.exists():
-        logger.info("检测到标准YOLO格式数据集，无需重新组织")
-        return  # 已经是标准格式，直接返回
+        logger.info("检测到标准YOLO格式数据集，正在复制到正确位置...")
+        
+        # 如果数据已经在正确位置，直接返回
+        actual_train_img_dir = dataset_path / 'train' / 'images'
+        actual_val_img_dir = dataset_path / 'val' / 'images'
+        
+        if actual_train_img_dir.exists() and actual_val_img_dir.exists():
+            logger.info("数据已在正确位置，无需移动")
+            return
+        
+        # 创建标准目录结构
+        train_img_dir = dataset_path / 'train' / 'images'
+        train_lbl_dir = dataset_path / 'train' / 'labels'
+        val_img_dir = dataset_path / 'val' / 'images'
+        val_lbl_dir = dataset_path / 'val' / 'labels'
+        test_img_dir = dataset_path / 'test' / 'images'
+        test_lbl_dir = dataset_path / 'test' / 'labels'
+        
+        # 创建目录
+        train_img_dir.mkdir(parents=True, exist_ok=True)
+        train_lbl_dir.mkdir(parents=True, exist_ok=True)
+        val_img_dir.mkdir(parents=True, exist_ok=True)
+        val_lbl_dir.mkdir(parents=True, exist_ok=True)
+        test_img_dir.mkdir(parents=True, exist_ok=True)
+        test_lbl_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 检查images和labels目录是否存在
+        images_train_dir = dataset_path / 'images' / 'train'
+        images_val_dir = dataset_path / 'images' / 'val'
+        labels_train_dir = dataset_path / 'labels' / 'train'
+        labels_val_dir = dataset_path / 'labels' / 'val'
+        
+        # 复制训练集
+        for img_file in images_train_dir.glob('*'):
+            if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+                label_file = labels_train_dir / (img_file.stem + '.txt')
+                if label_file.exists():
+                    shutil.copy2(img_file, train_img_dir / img_file.name)
+                    shutil.copy2(label_file, train_lbl_dir / label_file.name)
+        
+        # 复制验证集
+        for img_file in images_val_dir.glob('*'):
+            if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+                label_file = labels_val_dir / (img_file.stem + '.txt')
+                if label_file.exists():
+                    shutil.copy2(img_file, val_img_dir / img_file.name)
+                    shutil.copy2(label_file, val_lbl_dir / label_file.name)
+        
+        # 复制测试集（如果存在）
+        images_test_dir = dataset_path / 'images' / 'test'
+        labels_test_dir = dataset_path / 'labels' / 'test'
+        if images_test_dir.exists() and labels_test_dir.exists():
+            for img_file in images_test_dir.glob('*'):
+                if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+                    label_file = labels_test_dir / (img_file.stem + '.txt')
+                    if label_file.exists():
+                        shutil.copy2(img_file, test_img_dir / img_file.name)
+                        shutil.copy2(label_file, test_lbl_dir / label_file.name)
+        
+        logger.info("数据集已重新组织到标准格式")
+        return  # 已经是标准格式，重新组织后返回
+
+    # 检查是否有由yolo_formatter.py生成的数据集结构（train/val/test目录分别包含images和labels）
+    train_img_dir = dataset_path / 'train' / 'images'
+    train_lbl_dir = dataset_path / 'train' / 'labels'
+    val_img_dir = dataset_path / 'val' / 'images'
+    val_lbl_dir = dataset_path / 'val' / 'labels'
+    test_img_dir = dataset_path / 'test' / 'images'
+    test_lbl_dir = dataset_path / 'test' / 'labels'
+
+    # 如果已经存在train/val/test结构，还需要检查是否有实际的图像文件
+    if (train_img_dir.exists() and train_lbl_dir.exists() and 
+        val_img_dir.exists() and val_lbl_dir.exists()):
+        # 额外检查目录中是否有图像文件
+        train_img_count = len(list(train_img_dir.glob('*.[jJ][pP][gG]')) + 
+                              list(train_img_dir.glob('*.[pP][nN][gG]')) + 
+                              list(train_img_dir.glob('*.[jJ][pP][eE][gG]')) + 
+                              list(train_img_dir.glob('*.[bB][mM][pP]')))
+        val_img_count = len(list(val_img_dir.glob('*.[jJ][pP][gG]')) + 
+                            list(val_img_dir.glob('*.[pP][nN][gG]')) + 
+                            list(val_img_dir.glob('*.[jJ][pP][eE][gG]')) + 
+                            list(val_img_dir.glob('*.[bB][mM][pP]')))
+        
+        if train_img_count > 0 and val_img_count > 0:
+            logger.info("检测到由yolo_formatter.py生成的数据集格式，无需进一步处理")
+            return
+        else:
+            logger.error(f"检测到数据集目录结构，但缺少图像文件: train图片数={train_img_count}, val图片数={val_img_count}")
+            raise FileNotFoundError(f"数据集中没有找到有效的图片文件: "
+                                    f"train目录({train_img_dir})或val目录({val_img_dir})中没有图像文件")
 
     # 如果不是标准格式，则按照原有逻辑处理按类别组织的格式
     train_dir = dataset_path / 'train'
@@ -157,16 +247,29 @@ def prepare_dataset(
 
             if images_dir.exists() and labels_dir.exists():
                 for img_file in images_dir.glob('*.jpg'):
-                    label_file = labels_dir / (img_file.stem + '.txt')
-                    if label_file.exists():
-                        all_images.append({
-                            'img_path': img_file,
-                            'label_path': label_file,
-                            'category': category_dir.name
-                        })
+                    if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
+                        label_file = labels_dir / (img_file.stem + '.txt')
+                        if label_file.exists():
+                            all_images.append({
+                                'img_path': img_file,
+                                'label_path': label_file,
+                                'category': category_dir.name
+                            })
 
     if not all_images:
-        raise ValueError(f"数据集中没有找到有效的图片和标注: {dataset_path}")
+        # 提供更详细的错误信息，说明期望的数据集格式
+        error_msg = (
+            f"数据集中没有找到有效的图片和标注: {dataset_path}\n"
+            f"请确保您的数据集满足以下条件:\n"
+            f"1. 存在标准YOLO格式: {dataset_path}/images/train/ 和 {dataset_path}/images/val/\n"
+            f"2. 或者由yolo_formatter.py生成的格式: {dataset_path}/train/images/ 和 {dataset_path}/val/images/\n"
+            f"3. 或者按类别组织的格式: \n"
+            f"   - {dataset_path}/class_name/images/*.jpg\n"
+            f"   - {dataset_path}/class_name/labels/*.txt\n"
+            f"   并且jpg图片文件与txt标签文件需一一对应\n"
+            f"4. 同时还需要一个classes.txt文件在数据集根目录下"
+        )
+        raise ValueError(error_msg)
 
     logger.info(f"总共找到 {len(all_images)} 张图片")
 
