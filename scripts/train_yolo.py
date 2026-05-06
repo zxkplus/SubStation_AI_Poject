@@ -43,7 +43,8 @@ def generate_data_yaml(
     dataset_path: str,
     output_path: str,
     train_ratio: float = 0.8,
-    val_ratio: float = 0.2
+    val_ratio: float = 0.2,
+    ignore_classes: list = None
 ):
     """
     自动生成data.yaml配置文件
@@ -53,7 +54,11 @@ def generate_data_yaml(
         output_path: 输出配置文件路径
         train_ratio: 训练集比例
         val_ratio: 验证集比例
+        ignore_classes: 要忽略的类别列表
     """
+    if ignore_classes is None:
+        ignore_classes = []
+    
     dataset_path = Path(dataset_path)
     classes_file = dataset_path / 'classes.txt'
 
@@ -62,7 +67,17 @@ def generate_data_yaml(
         raise FileNotFoundError(f"找不到classes.txt文件: {classes_file}")
 
     with open(classes_file, 'r', encoding='utf-8') as f:
-        classes = [line.strip().split(' ', 1)[1] for line in f if line.strip()]
+        original_classes = [line.strip().split(' ', 1)[1] for line in f if line.strip()]
+    
+    # 过滤要忽略的类别
+    filtered_classes = [c for c in original_classes if c not in ignore_classes]
+    
+    if len(filtered_classes) == 0:
+        raise ValueError(f"所有类别都被忽略！原类别: {original_classes}, 忽略: {ignore_classes}")
+    
+    if len(filtered_classes) != len(original_classes):
+        logger.info(f"已过滤类别: {set(original_classes) - set(filtered_classes)}")
+        logger.info(f"剩余类别: {filtered_classes}")
 
     # 检查是否存在train/val/test目录结构
     train_dir = dataset_path / 'train'
@@ -74,8 +89,8 @@ def generate_data_yaml(
     # 构建配置
     config = {
         'path': str(dataset_path.absolute()),
-        'nc': len(classes),
-        'names': {i: name for i, name in enumerate(classes)},
+        'nc': len(filtered_classes),
+        'names': {i: name for i, name in enumerate(filtered_classes)},
         'img_size': 640,
         'epochs': 300,
         'batch_size': 32,
@@ -101,16 +116,71 @@ def generate_data_yaml(
         yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
 
     logger.info(f"数据集配置文件已生成: {output_path}")
-    logger.info(f"类别数量: {len(classes)}")
-    logger.info(f"类别列表: {classes}")
+    logger.info(f"类别数量: {len(filtered_classes)}")
+    logger.info(f"类别列表: {filtered_classes}")
 
     return output_path
+
+
+def filter_label_file(label_path, class_mapping, ignore_classes):
+    """
+    过滤标注文件，移除指定的类别
+    
+    Args:
+        label_path: 标注文件路径
+        class_mapping: 类别名称到ID的映射字典
+        ignore_classes: 要忽略的类别名称列表
+        
+    Returns:
+        bool: 如果文件中有有效标注返回True，否则返回False
+    """
+    if not label_path.exists():
+        return False
+    
+    # 创建反向映射：ID到类别名称
+    id_to_class = {v: k for k, v in class_mapping.items()}
+    
+    # 读取原始标注
+    with open(label_path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    # 过滤掉要忽略的类别
+    filtered_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+            
+        try:
+            class_id = int(parts[0])
+            class_name = id_to_class.get(class_id)
+            if class_name is None or class_name not in ignore_classes:
+                filtered_lines.append(line)
+        except (ValueError, KeyError):
+            # 如果无法解析类别ID，保留原行（可能是格式问题）
+            filtered_lines.append(line)
+    
+    # 如果没有有效标注，删除文件并返回False
+    if not filtered_lines:
+        label_path.unlink(missing_ok=True)
+        return False
+    
+    # 写回过滤后的标注
+    with open(label_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(filtered_lines) + '\n')
+    
+    return True
 
 
 def prepare_dataset(
     dataset_path: str,
     train_ratio: float = 0.8,
-    val_ratio: float = 0.2
+    val_ratio: float = 0.2,
+    ignore_classes: list = None
 ):
     """
     准备训练数据集，划分训练集和验证集
@@ -123,11 +193,28 @@ def prepare_dataset(
         dataset_path: YOLO格式数据集路径
         train_ratio: 训练集比例
         val_ratio: 验证集比例
+        ignore_classes: 要忽略的类别列表
     """
+    if ignore_classes is None:
+        ignore_classes = []
+        
     import shutil
     import random
 
     dataset_path = Path(dataset_path)
+    
+    # 读取类别映射（用于过滤标注）
+    class_mapping = {}
+    classes_file = dataset_path / 'classes.txt'
+    if classes_file.exists():
+        with open(classes_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    parts = line.split(' ', 1)
+                    if len(parts) == 2:
+                        class_id, class_name = parts
+                        class_mapping[class_name] = int(class_id)
     
     # 检查是否已经是标准YOLO格式（存在images/train和images/val目录）
     standard_train_img_dir = dataset_path / 'images' / 'train'
@@ -167,34 +254,62 @@ def prepare_dataset(
         labels_train_dir = dataset_path / 'labels' / 'train'
         labels_val_dir = dataset_path / 'labels' / 'val'
         
-        # 复制训练集
+        # 复制训练集并过滤标注
+        valid_train_files = 0
         for img_file in images_train_dir.glob('*'):
             if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
                 label_file = labels_train_dir / (img_file.stem + '.txt')
                 if label_file.exists():
+                    # 复制图片
                     shutil.copy2(img_file, train_img_dir / img_file.name)
-                    shutil.copy2(label_file, train_lbl_dir / label_file.name)
+                    # 复制并过滤标注
+                    temp_label_path = train_lbl_dir / label_file.name
+                    shutil.copy2(label_file, temp_label_path)
+                    if filter_label_file(temp_label_path, class_mapping, ignore_classes):
+                        valid_train_files += 1
+                    else:
+                        # 如果过滤后没有有效标注，删除对应的图片
+                        (train_img_dir / img_file.name).unlink(missing_ok=True)
         
-        # 复制验证集
+        # 复制验证集并过滤标注
+        valid_val_files = 0
         for img_file in images_val_dir.glob('*'):
             if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
                 label_file = labels_val_dir / (img_file.stem + '.txt')
                 if label_file.exists():
+                    # 复制图片
                     shutil.copy2(img_file, val_img_dir / img_file.name)
-                    shutil.copy2(label_file, val_lbl_dir / label_file.name)
+                    # 复制并过滤标注
+                    temp_label_path = val_lbl_dir / label_file.name
+                    shutil.copy2(label_file, temp_label_path)
+                    if filter_label_file(temp_label_path, class_mapping, ignore_classes):
+                        valid_val_files += 1
+                    else:
+                        # 如果过滤后没有有效标注，删除对应的图片
+                        (val_img_dir / img_file.name).unlink(missing_ok=True)
         
-        # 复制测试集（如果存在）
+        # 复制测试集（如果存在）并过滤标注
         images_test_dir = dataset_path / 'images' / 'test'
         labels_test_dir = dataset_path / 'labels' / 'test'
         if images_test_dir.exists() and labels_test_dir.exists():
+            valid_test_files = 0
             for img_file in images_test_dir.glob('*'):
                 if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
                     label_file = labels_test_dir / (img_file.stem + '.txt')
                     if label_file.exists():
+                        # 复制图片
                         shutil.copy2(img_file, test_img_dir / img_file.name)
-                        shutil.copy2(label_file, test_lbl_dir / label_file.name)
+                        # 复制并过滤标注
+                        temp_label_path = test_lbl_dir / label_file.name
+                        shutil.copy2(label_file, temp_label_path)
+                        if filter_label_file(temp_label_path, class_mapping, ignore_classes):
+                            valid_test_files += 1
+                        else:
+                            # 如果过滤后没有有效标注，删除对应的图片
+                            (test_img_dir / img_file.name).unlink(missing_ok=True)
+            logger.info(f"测试集处理完成: {valid_test_files} 张有效图片")
         
-        logger.info("数据集已重新组织到标准格式")
+        logger.info(f"数据集已重新组织到标准格式，训练集: {valid_train_files} 张, 验证集: {valid_val_files} 张")
         return  # 已经是标准格式，重新组织后返回
 
     # 检查是否有由yolo_formatter.py生成的数据集结构（train/val/test目录分别包含images和labels）
@@ -219,7 +334,65 @@ def prepare_dataset(
                             list(val_img_dir.glob('*.[bB][mM][pP]')))
         
         if train_img_count > 0 and val_img_count > 0:
-            logger.info("检测到由yolo_formatter.py生成的数据集格式，无需进一步处理")
+            logger.info("检测到由yolo_formatter.py生成的数据集格式，正在过滤指定类别...")
+            
+            # 过滤训练集标注
+            valid_train_files = 0
+            for label_file in train_lbl_dir.glob('*.txt'):
+                img_file = train_img_dir / (label_file.stem + label_file.suffix.replace('.txt', '.jpg'))
+                if not img_file.exists():
+                    img_file = train_img_dir / (label_file.stem + '.png')
+                if not img_file.exists():
+                    img_file = train_img_dir / (label_file.stem + '.jpeg')
+                if not img_file.exists():
+                    img_file = train_img_dir / (label_file.stem + '.bmp')
+                
+                if filter_label_file(label_file, class_mapping, ignore_classes):
+                    valid_train_files += 1
+                else:
+                    # 如果过滤后没有有效标注，删除对应的图片
+                    img_file.unlink(missing_ok=True)
+                    label_file.unlink(missing_ok=True)
+            
+            # 过滤验证集标注
+            valid_val_files = 0
+            for label_file in val_lbl_dir.glob('*.txt'):
+                img_file = val_img_dir / (label_file.stem + label_file.suffix.replace('.txt', '.jpg'))
+                if not img_file.exists():
+                    img_file = val_img_dir / (label_file.stem + '.png')
+                if not img_file.exists():
+                    img_file = val_img_dir / (label_file.stem + '.jpeg')
+                if not img_file.exists():
+                    img_file = val_img_dir / (label_file.stem + '.bmp')
+                
+                if filter_label_file(label_file, class_mapping, ignore_classes):
+                    valid_val_files += 1
+                else:
+                    # 如果过滤后没有有效标注，删除对应的图片
+                    img_file.unlink(missing_ok=True)
+                    label_file.unlink(missing_ok=True)
+            
+            # 过滤测试集标注（如果存在）
+            if test_img_dir.exists() and test_lbl_dir.exists():
+                valid_test_files = 0
+                for label_file in test_lbl_dir.glob('*.txt'):
+                    img_file = test_img_dir / (label_file.stem + label_file.suffix.replace('.txt', '.jpg'))
+                    if not img_file.exists():
+                        img_file = test_img_dir / (label_file.stem + '.png')
+                    if not img_file.exists():
+                        img_file = test_img_dir / (label_file.stem + '.jpeg')
+                    if not img_file.exists():
+                        img_file = test_img_dir / (label_file.stem + '.bmp')
+                    
+                    if filter_label_file(label_file, class_mapping, ignore_classes):
+                        valid_test_files += 1
+                    else:
+                        # 如果过滤后没有有效标注，删除对应的图片
+                        img_file.unlink(missing_ok=True)
+                        label_file.unlink(missing_ok=True)
+                logger.info(f"测试集过滤完成: {valid_test_files} 张有效图片")
+            
+            logger.info(f"数据集类别过滤完成，训练集: {valid_train_files} 张, 验证集: {valid_val_files} 张")
             return
         else:
             logger.error(f"检测到数据集目录结构，但缺少图像文件: train图片数={train_img_count}, val图片数={val_img_count}")
@@ -242,11 +415,15 @@ def prepare_dataset(
     all_images = []
     for category_dir in dataset_path.iterdir():
         if category_dir.is_dir() and category_dir.name not in ['train', 'val', 'test']:
+            # 如果当前类别在忽略列表中，跳过
+            if category_dir.name in ignore_classes:
+                continue
+                
             images_dir = category_dir / 'images'
             labels_dir = category_dir / 'labels'
 
             if images_dir.exists() and labels_dir.exists():
-                for img_file in images_dir.glob('*.jpg'):
+                for img_file in images_dir.glob('*'):
                     if img_file.suffix.lower() in ['.jpg', '.jpeg', '.png', '.bmp']:
                         label_file = labels_dir / (img_file.stem + '.txt')
                         if label_file.exists():
@@ -353,6 +530,8 @@ def main():
                         help='预热阶段偏置学习率')
     parser.add_argument('--patience', type=int, default=50,
                         help='早停耐心值')
+    parser.add_argument('--ignore_classes', type=str, nargs='*', default=['bei_jin'],
+                        help='要忽略的类别名称列表（多个类别用空格分隔）')
 
     args = parser.parse_args()
 
@@ -370,8 +549,8 @@ def main():
         # 如果data.yaml不存在，自动生成
         if not Path(args.data_config).exists():
             logger.info("数据集配置文件不存在，正在准备数据集...")
-            prepare_dataset(args.dataset_path, args.train_ratio, 1 - args.train_ratio)
-            generate_data_yaml(args.dataset_path, args.data_config, args.train_ratio, 1 - args.train_ratio)
+            prepare_dataset(args.dataset_path, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
+            generate_data_yaml(args.dataset_path, args.data_config, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
 
         # 加载模型配置（如果有）
         model_config = None
