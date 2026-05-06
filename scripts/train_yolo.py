@@ -13,44 +13,6 @@ from typing import Dict, Any
 # 添加scripts目录到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-# 配置matplotlib中文字体支持
-import matplotlib
-matplotlib.use('Agg')  # 使用非交互式后端
-import matplotlib.pyplot as plt
-
-# 尝试设置中文字体，避免字体缺失警告
-def setup_chinese_font():
-    """设置matplotlib中文字体支持"""
-    try:
-        # 尝试使用系统中常见的中文字体
-        chinese_fonts = [
-            'SimHei',      # 黑体
-            'Microsoft YaHei',  # 微软雅黑
-            'WenQuanYi Micro Hei',  # 文泉驿微米黑
-            'DejaVu Sans',  # 默认字体（作为备选）
-        ]
-        
-        # 检查可用字体
-        available_fonts = set([f.name for f in matplotlib.font_manager.fontManager.ttflist])
-        
-        for font in chinese_fonts:
-            if font in available_fonts:
-                matplotlib.rcParams['font.sans-serif'] = [font]
-                matplotlib.rcParams['axes.unicode_minus'] = False  # 正常显示负号
-                break
-        else:
-            # 如果没有找到中文字体，使用默认字体但忽略中文警告
-            matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
-            matplotlib.rcParams['axes.unicode_minus'] = False
-            
-    except Exception as e:
-        # 如果字体配置失败，使用默认配置
-        matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
-        matplotlib.rcParams['axes.unicode_minus'] = False
-
-# 执行字体配置
-setup_chinese_font()
-
 from trainers.base_trainer import BaseTrainer
 from trainers.yolov6_trainer import YOLOv6Trainer
 from trainers.yolov26_trainer import YOLO26Trainer
@@ -345,10 +307,10 @@ def prepare_dataset(
                         else:
                             # 如果过滤后没有有效标注，删除对应的图片
                             (test_img_dir / img_file.name).unlink(missing_ok=True)
-            logger.info(f"测试集处理完成: {valid_test_files} 张有效图片")
+            logger.info(f"测试集过滤完成: {valid_test_files} 张有效图片")
         
-        logger.info(f"数据集已重新组织到标准格式，训练集: {valid_train_files} 张, 验证集: {valid_val_files} 张")
-        return  # 已经是标准格式，重新组织后返回
+        logger.info(f"数据集类别过滤完成，训练集: {valid_train_files} 张, 验证集: {valid_val_files} 张")
+        return
 
     # 检查是否有由yolo_formatter.py生成的数据集结构（train/val/test目录分别包含images和labels）
     train_img_dir = dataset_path / 'train' / 'images'
@@ -568,7 +530,7 @@ def main():
                         help='预热阶段偏置学习率')
     parser.add_argument('--patience', type=int, default=50,
                         help='早停耐心值')
-    parser.add_argument('--ignore_classes', type=str, nargs='*', default=['bei_jin'],
+    parser.add_argument('--ignore_classes', type=str, nargs='*', default=[],
                         help='要忽略的类别名称列表（多个类别用空格分隔）')
 
     args = parser.parse_args()
