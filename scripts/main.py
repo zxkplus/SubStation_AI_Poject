@@ -111,7 +111,7 @@ def main():
                 
                 # convert模式：不创建子目录，每个类别转换100张
                 cropper.convert_dataset(
-                    samples_per_class=100,
+                    samples_per_class=args.samples_per_class,
                     expand_ratio=args.expand_ratio,
                     min_size=args.min_size,
                     output_images_subdir="",  # 不创建images子目录
