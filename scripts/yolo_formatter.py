@@ -13,7 +13,7 @@ import json
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Set
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import threading
@@ -24,17 +24,19 @@ import yaml
 class YOLOFormatter:
     """YOLO格式转换器（支持多线程并行处理）"""
     
-    def __init__(self, input_dataset_path: str, output_dataset_path: str):
+    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None):
         """
         初始化转换器
         
         Args:
             input_dataset_path: 输入数据集路径（原始数据）
             output_dataset_path: 输出数据集路径（YOLO格式）
+            ignore_classes: 要忽略的类别名称列表
         """
         self.input_path = Path(input_dataset_path)
         self.output_path = Path(output_dataset_path)
         self.supported_image_formats = {'.jpg', '.jpeg', '.png', '.bmp'}
+        self.ignore_classes = set(ignore_classes) if ignore_classes else set()
         
         # 线程锁
         self._lock = threading.Lock()
@@ -64,8 +66,11 @@ class YOLOFormatter:
                 for cls, count in class_dist.items():
                     self.stats['class_distribution'][cls] += count
     
-    def _get_class_id(self, class_name: str) -> int:
-        """获取或分配类别ID"""
+    def _get_class_id(self, class_name: str) -> Optional[int]:
+        """获取或分配类别ID，如果类别被忽略则返回None"""
+        if class_name in self.ignore_classes:
+            return None
+            
         if class_name not in self.class_mapping:
             self.class_mapping[class_name] = self.next_class_id
             self.reverse_class_mapping[self.next_class_id] = class_name
@@ -86,6 +91,10 @@ class YOLOFormatter:
             if not category_dir.is_dir():
                 continue
             
+            # 如果类别被忽略，跳过整个目录
+            if category_dir.name in self.ignore_classes:
+                continue
+                
             # 遍历第二层目录（图片和JSON文件）
             for file_path in category_dir.iterdir():
                 if file_path.suffix.lower() in self.supported_image_formats:
@@ -193,12 +202,19 @@ class YOLOFormatter:
         if not polygons_with_labels:
             return None
         
-        # 转换为YOLO格式
+        # 转换为YOLO格式，过滤被忽略的类别
         yolo_annotations = []
         class_dist = defaultdict(int)
         
         for polygon, label in polygons_with_labels:
+            # 检查标签是否被忽略
+            if label in self.ignore_classes:
+                continue
+                
             class_id = self._get_class_id(label)
+            if class_id is None:  # 类别被忽略
+                continue
+                
             yolo_coords = self.polygon_to_yolo_format(polygon, img_width, img_height)
             
             # 构造YOLO格式字符串
@@ -206,6 +222,10 @@ class YOLOFormatter:
             yolo_annotations.append(yolo_line)
             class_dist[label] += 1
         
+        # 如果所有标注都被过滤掉了，返回None
+        if not yolo_annotations:
+            return None
+            
         # 更新统计
         self._update_stats(annotations=len(yolo_annotations), class_dist=class_dist)
         
@@ -331,7 +351,8 @@ class YOLOFormatter:
         self,
         train_ratio: float = 0.8,
         val_ratio: float = 0.1,
-        num_workers: int = 8
+        num_workers: int = 8,
+        ignore_classes: List[str] = None
     ):
         """
         格式化整个数据集为YOLO格式
@@ -340,7 +361,12 @@ class YOLOFormatter:
             train_ratio: 训练集比例
             val_ratio: 验证集比例
             num_workers: 并行处理的线程数
+            ignore_classes: 要忽略的类别名称列表
         """
+        # 更新忽略类别设置
+        if ignore_classes is not None:
+            self.ignore_classes = set(ignore_classes)
+        
         print("=" * 60)
         print("YOLO格式转换（多线程并行）")
         print("=" * 60)
@@ -349,6 +375,8 @@ class YOLOFormatter:
         print(f"训练集比例: {train_ratio}")
         print(f"验证集比例: {val_ratio}")
         print(f"测试集比例: {1 - train_ratio - val_ratio}")
+        if self.ignore_classes:
+            print(f"忽略类别: {', '.join(sorted(self.ignore_classes))}")
         print()
         
         # 创建根目录

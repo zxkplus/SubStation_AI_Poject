@@ -86,6 +86,15 @@ def main():
         help='并行处理的线程数（用于yolo模式）'
     )
     
+    # 新增：忽略类别参数
+    parser.add_argument(
+        '--ignore_classes',
+        nargs='+',
+        type=str,
+        default=[],
+        help='要忽略的类别名称列表（用于yolo模式），这些类别将不会包含在输出数据集中'
+    )
+    
     args = parser.parse_args()
     
     print("=" * 60)
@@ -95,6 +104,8 @@ def main():
     print(f"运行模式: {args.mode}")
     if args.mode in ['yolo', 'convert']:
         print(f"输出路径: {args.output_yolo_path or '默认路径'}")
+        if args.ignore_classes:
+            print(f"忽略类别: {', '.join(args.ignore_classes)}")
     print()
     
     try:
@@ -130,9 +141,10 @@ def main():
                 
                 # yolo模式：转换为YOLO格式，划分数据集
                 formatter.format_dataset(
-                    train_ratio=0.8,
-                    val_ratio=0.1,
-                    num_workers=args.num_workers
+                    train_ratio=0.7,
+                    val_ratio=0.2,
+                    num_workers=args.num_workers,
+                    ignore_classes=args.ignore_classes  # 传递忽略类别参数
                 )
         
         else:
