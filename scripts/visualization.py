@@ -14,6 +14,39 @@ import matplotlib
 matplotlib.use('Agg')  # 使用非交互式后端
 import matplotlib.pyplot as plt
 
+# 配置matplotlib中文字体支持
+def setup_chinese_font():
+    """设置matplotlib中文字体支持"""
+    try:
+        # 尝试使用系统中常见的中文字体
+        chinese_fonts = [
+            'SimHei',      # 黑体
+            'Microsoft YaHei',  # 微软雅黑
+            'WenQuanYi Micro Hei',  # 文泉驿微米黑
+            'DejaVu Sans',  # 默认字体（作为备选）
+        ]
+        
+        # 检查可用字体
+        available_fonts = set([f.name for f in matplotlib.font_manager.fontManager.ttflist])
+        
+        for font in chinese_fonts:
+            if font in available_fonts:
+                matplotlib.rcParams['font.sans-serif'] = [font]
+                matplotlib.rcParams['axes.unicode_minus'] = False  # 正常显示负号
+                break
+        else:
+            # 如果没有找到中文字体，使用默认字体但忽略中文警告
+            matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
+            matplotlib.rcParams['axes.unicode_minus'] = False
+            
+    except Exception as e:
+        # 如果字体配置失败，使用默认配置
+        matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
+        matplotlib.rcParams['axes.unicode_minus'] = False
+
+# 执行字体配置
+setup_chinese_font()
+
 
 class MaskVisualizer:
     """Mask可视化器"""
