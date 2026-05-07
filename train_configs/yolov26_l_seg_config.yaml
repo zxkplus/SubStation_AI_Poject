@@ -2,7 +2,7 @@
 
 # 模型配置
 model:
-  name: yolo26s_seg  # 可选: yolo26n_seg, yolo26s_seg, yolo26m_seg, yolo26l_seg, yolo26x_seg
+  name: yolo26l_seg  # 可选: yolo26n_seg, yolo26s_seg, yolo26m_seg, yolo26l_seg, yolo26x_seg
   pretrained: True  # 使用预训练权重
   task: segment  # 任务类型：segment（实例分割）
 
@@ -15,7 +15,7 @@ model:
 
 # 训练参数（通过命令行参数覆盖）
 training:
-  epochs: 100
+  epochs: 60
   batch_size: 6
   img_size: 1024
   optimizer: auto  # auto, SGD, Adam, AdamW
@@ -33,12 +33,12 @@ augmentation:
   hsv_h: 0.015  # 色调增强
   hsv_s: 0.7    # 饱和度增强
   hsv_v: 0.4    # 明度增强
-  degrees: 0.0  # 旋转角度（±度）
+  degrees: 0.2  # 旋转角度（±度）
   translate: 0.1  # 平移（±比例）
   scale: 0.5    # 缩放（±比例）
   shear: 0.0    # 剪切角度（±度）
   perspective: 0.0  # 透视变换
-  flipud: 0.0   # 垂直翻转概率
+  flipud: 0.5   # 垂直翻转概率
   fliplr: 0.5   # 水平翻转概率
   mosaic: 1.0   # 马赛克增强概率
   mixup: 0.0    # Mixup增强概率
@@ -55,7 +55,7 @@ loss:
 validation:
   conf_thres: 0.001  # 置信度阈值
   iou_thres: 0.6     # IOU阈值
-  max_det: 300       # 每张图最大检测数
+  max_det: 100       # 每张图最大检测数
 
 # 导出参数
 export:

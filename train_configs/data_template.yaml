@@ -10,12 +10,22 @@ val: val      # 验证集目录，包含images和labels子目录
 test: test    # 测试集目录（可选）
 
 # 类别数量
-nc: 2  # 根据实际类别数量修改
+nc: 12  # 根据实际类别数量修改
 
 # 类别名称（与classes.txt中的顺序一致）
 names:
-  0: class_1  # 修改为实际类别名称
-  1: class_2  # 修改为实际类别名称
+  0: she_bei_biao_shi
+  1: fa_lan  
+  2: bei_jin
+  3: jie_di_yin_xia_xian
+  4: peng_zhang_qi
+  5: bei_jing
+  6: 触头、导电臂
+  7: shen_suo_jie
+  8: hu_xi_qi
+  9: ji_dian_qi
+  10: jue_yuan_zi
+  11: ji_gou_xiang
 
 # 图片尺寸（YOLO会自动resize，但这里指定目标尺寸）
 img_size: 640
@@ -49,3 +59,6 @@ fliplr: 0.5
 # 实例分割特定参数
 mask_ratio: 4  # mask下采样比例
 overlap_mask: True  # 是否允许mask重叠
+
+# 注意：如果需要在数据转换阶段忽略某些类别，请使用以下命令：
+# python scripts/main.py --mode yolo --dataset_path /path/to/input --output_yolo_path /path/to/output --ignore_classes class_name1 class_name2
