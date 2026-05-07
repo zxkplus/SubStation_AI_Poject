@@ -672,7 +672,8 @@ def main():
                 pose=args.mask_loss,  # ultralytics中mask损失可能使用pose参数
                 conf_thres=args.conf_thres,
                 iou_thres=args.iou_thres,
-                max_det=args.max_det
+                max_det=args.max_det,
+                weights_path=args.weights  # 添加这一行，传递weights参数
             )
         elif args.mode == 'val':
             if args.weights is None:

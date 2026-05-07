@@ -24,11 +24,11 @@ class YOLO26Trainer(BaseTrainer):
 
     # 支持的模型尺寸
     MODEL_SIZES = {
-        'n': 'yolo26n.pt',
-        's': 'yolo26s.pt',
-        'm': 'yolo26m.pt',
-        'l': 'yolo26l.pt',
-        'x': 'yolo26x.pt'
+        'n': 'yolo26n-seg.pt',
+        's': 'yolo26s-seg.pt',
+        'm': 'yolo26m-seg.pt',
+        'l': 'yolo26l-seg.pt',
+        'x': 'yolo26x-seg.pt'
     }
 
     def __init__(self, *args, model_size: str = 's', **kwargs):
@@ -136,6 +136,7 @@ class YOLO26Trainer(BaseTrainer):
         conf_thres: float = 0.001,
         iou_thres: float = 0.6,
         max_det: int = 300,
+        weights_path: Optional[str] = None,
         **kwargs
     ):
         """
@@ -188,7 +189,7 @@ class YOLO26Trainer(BaseTrainer):
                     self.model_name = Path(model_path).name
                     logger.info(f"加载checkpoint用于恢复训练: {model_path}")
                 else:
-                    model = self._load_model()
+                    model = self._load_model(weights_path)
 
                 # 训练参数
                 train_args = {
