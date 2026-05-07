@@ -159,7 +159,10 @@ class YOLO26Trainer(BaseTrainer):
         logger.info("开始训练YOLO26实例分割模型...")
         logger.info(f"数据集配置: {self.data_config_path}")
         logger.info(f"输出目录: {self.output_dir}")
-        logger.info(f"模型: {self.model_name}")
+        if resume:
+            logger.info(f"恢复训练模式: {resume}")
+        else:
+            logger.info(f"模型: {self.model_name}")
         logger.info(f"Epochs: {epochs}, Batch Size: {batch_size}, Image Size: {img_size}")
 
         # 尝试训练，如果出现CUDA内存不足的情况，自动减少批次大小
@@ -175,8 +178,17 @@ class YOLO26Trainer(BaseTrainer):
 
         for idx, current_batch_size in enumerate(batch_sizes_to_try):
             try:
-                # 加载模型
-                model = self._load_model(weights_path=resume)
+                # 加载模型 - 如果是resume模式，不预先加载模型，让ultralytics自己处理
+                if resume:
+                    # 在resume模式下，直接使用checkpoint路径作为模型
+                    model_path = resume
+                    from ultralytics import YOLO
+                    model = YOLO(model_path, task='segment')
+                    # 更新模型名称为实际使用的权重文件
+                    self.model_name = Path(model_path).name
+                    logger.info(f"加载checkpoint用于恢复训练: {model_path}")
+                else:
+                    model = self._load_model()
 
                 # 训练参数
                 train_args = {
@@ -236,6 +248,12 @@ class YOLO26Trainer(BaseTrainer):
                     train_args['pretrained'] = kwargs['pretrained']
                 if 'lrf' in kwargs:
                     train_args['lrf'] = kwargs['lrf']
+
+                # 关键修复：正确设置resume参数
+                if resume:
+                    train_args['resume'] = True
+                else:
+                    train_args['resume'] = False
 
                 logger.info(f"使用批次大小 {current_batch_size} 开始训练...")
 
