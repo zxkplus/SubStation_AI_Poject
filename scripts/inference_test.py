@@ -16,6 +16,7 @@ import numpy as np
 from ultralytics import YOLO
 import matplotlib.pyplot as plt
 from service.inference import YOLOMaskService
+from tqdm import tqdm
 
 
 def visualize_segmentation_result(image, detections, class_names=None):
@@ -70,7 +71,45 @@ def visualize_segmentation_result(image, detections, class_names=None):
     return vis_image
 
 
-def process_single_image(image_path, model_service, class_names=None):
+def save_or_show_result(original_image, vis_image, image_name, save_path=None):
+    """
+    根据 save_path 参数决定是保存图像还是弹窗显示
+    
+    Args:
+        original_image: 原始图像
+        vis_image: 可视化后的图像
+        image_name: 图像名称
+        save_path: 保存路径，如果为 None 则弹窗显示
+    """
+    if save_path is None:
+        # 弹窗显示
+        plt.figure(figsize=(12, 8))
+        plt.subplot(1, 2, 1)
+        plt.title(f"原始图像 - {image_name}")
+        plt.imshow(original_image)
+        plt.axis('off')
+        
+        plt.subplot(1, 2, 2)
+        plt.title(f"分割结果")
+        plt.imshow(vis_image)
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+    else:
+        # 保存图像 - 只保存预测结果图
+        save_dir = Path(save_path)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 只保存分割结果图
+        output_path = save_dir / f"result_{image_name}"
+        
+        # 转换为BGR格式保存（因为cv2.imwrite期望BGR）
+        vis_image_bgr = cv2.cvtColor(vis_image, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(str(output_path), vis_image_bgr)
+
+
+def process_single_image(image_path, model_service, class_names=None, save_path=None):
     """
     处理单张图片的分割任务
     
@@ -78,6 +117,7 @@ def process_single_image(image_path, model_service, class_names=None):
         image_path: 图片路径
         model_service: 模型服务实例
         class_names: 类别名称列表
+        save_path: 保存路径，如果为 None 则弹窗显示
     """
     # 读取图像
     image_bgr = cv2.imread(str(image_path))
@@ -98,26 +138,14 @@ def process_single_image(image_path, model_service, class_names=None):
     # 可视化结果
     vis_image = visualize_segmentation_result(image_rgb, all_detections, class_names)
     
-    # 显示结果
-    plt.figure(figsize=(12, 8))
-    plt.subplot(1, 2, 1)
-    plt.title("原始图像")
-    plt.imshow(image_rgb)
-    plt.axis('off')
-    
-    plt.subplot(1, 2, 2)
-    plt.title("分割结果")
-    plt.imshow(vis_image)
-    plt.axis('off')
-    
-    plt.tight_layout()
-    plt.show()
+    # 根据 save_path 决定展示方式
+    save_or_show_result(image_rgb, vis_image, image_path.name, save_path)
     
     print(f"处理图片: {image_path}")
     print(f"检测到 {len(all_detections)} 个目标")
 
 
-def process_image_folder(folder_path, model_service, class_names=None):
+def process_image_folder(folder_path, model_service, class_names=None, save_path=None):
     """
     处理文件夹中的所有图片
     
@@ -125,6 +153,7 @@ def process_image_folder(folder_path, model_service, class_names=None):
         folder_path: 图片文件夹路径
         model_service: 模型服务实例
         class_names: 类别名称列表
+        save_path: 保存路径，如果为 None 则弹窗显示
     """
     image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
     image_paths = []
@@ -140,9 +169,8 @@ def process_image_folder(folder_path, model_service, class_names=None):
     
     print(f"找到 {len(image_paths)} 张图片")
     
-    for idx, image_path in enumerate(image_paths):
-        print(f"\n处理第 {idx+1}/{len(image_paths)} 张图片: {image_path.name}")
-        
+    # 使用 tqdm 添加进度条
+    for idx, image_path in enumerate(tqdm(image_paths, desc="处理图片")):
         # 读取图像
         image_bgr = cv2.imread(str(image_path))
         if image_bgr is None:
@@ -162,22 +190,11 @@ def process_image_folder(folder_path, model_service, class_names=None):
         # 可视化结果
         vis_image = visualize_segmentation_result(image_rgb, all_detections, class_names)
         
-        # 显示结果
-        plt.figure(figsize=(12, 8))
-        plt.subplot(1, 2, 1)
-        plt.title(f"原始图像 - {image_path.name}")
-        plt.imshow(image_rgb)
-        plt.axis('off')
+        # 根据 save_path 决定展示方式
+        save_or_show_result(image_rgb, vis_image, image_path.name, save_path)
         
-        plt.subplot(1, 2, 2)
-        plt.title(f"分割结果 - 检测到 {len(all_detections)} 个目标")
-        plt.imshow(vis_image)
-        plt.axis('off')
-        
-        plt.tight_layout()
-        plt.show()
-        
-        print(f"检测到 {len(all_detections)} 个目标")
+        if save_path is None:
+            print(f"检测到 {len(all_detections)} 个目标")
 
 
 def load_class_names_from_yaml(data_yaml_path):
@@ -218,6 +235,7 @@ def main():
     parser.add_argument("--conf-threshold", type=float, default=0.25, help="置信度阈值 (默认: 0.25)")
     parser.add_argument("--img-size", type=int, default=640, help="输入图像尺寸 (默认: 640)")
     parser.add_argument("--data-config", type=str, help="数据配置文件路径，用于加载类别名称")
+    parser.add_argument("--save-path", type=str, default=None, help="结果保存路径，如果为空则弹窗显示")
     
     args = parser.parse_args()
     
@@ -244,13 +262,13 @@ def main():
         if image_path.is_dir():
             # 如果image参数实际上是一个目录，则按目录处理
             print(f"检测到 {args.image} 是一个目录，将按目录处理...")
-            process_image_folder(image_path, model_service, class_names)
+            process_image_folder(image_path, model_service, class_names, args.save_path)
         else:
             # 处理单张图片
             if not image_path.exists():
                 print(f"图片不存在: {image_path}")
                 return
-            process_single_image(image_path, model_service, class_names)
+            process_single_image(image_path, model_service, class_names, args.save_path)
     
     elif args.folder:
         # 处理图片文件夹
@@ -258,7 +276,7 @@ def main():
         if not folder_path.exists():
             print(f"文件夹不存在: {folder_path}")
             return
-        process_image_folder(folder_path, model_service, class_names)
+        process_image_folder(folder_path, model_service, class_names, args.save_path)
 
 
 if __name__ == "__main__":
