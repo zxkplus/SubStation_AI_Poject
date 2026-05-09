@@ -15,12 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from service.logger import get_logger, setup_global_exception_handler
 
 
-def demo_basic_logging():
+def test_basic_logging():
     """演示基础日志功能"""
     print("=== 基础日志功能演示 ===")
 
     # 获取日志记录器
-    logger = get_logger(name="demo", log_dir="demo_logs", prefix="demo")
+    logger = get_logger(name="test", log_dir="test_logs", prefix="test")
 
     logger.info("开始演示基础日志功能")
     logger.debug("这是一条调试信息")
@@ -29,14 +29,14 @@ def demo_basic_logging():
     logger.error("这是一条错误信息")
     logger.critical("这是一条严重错误信息")
 
-    print("基础日志演示完成，请查看 demo_logs/demo_YYYY-MM-DD.log 文件")
+    print("基础日志演示完成，请查看 test_logs/test_YYYY-MM-DD.log 文件")
 
 
-def demo_exception_logging():
+def test_exception_logging():
     """演示异常日志记录"""
     print("\n=== 异常日志记录演示 ===")
 
-    logger = get_logger(name="exception_demo", log_dir="demo_logs", prefix="exception")
+    logger = get_logger(name="exception_test", log_dir="test_logs", prefix="exception")
 
     logger.info("开始演示异常日志记录")
 
@@ -55,11 +55,11 @@ def demo_exception_logging():
     print("异常日志演示完成")
 
 
-def demo_thread_safety():
+def test_thread_safety():
     """演示线程安全性"""
     print("\n=== 线程安全演示 ===")
 
-    logger = get_logger(name="thread_demo", log_dir="demo_logs", prefix="thread")
+    logger = get_logger(name="thread_test", log_dir="test_logs", prefix="thread")
 
     def worker(thread_id):
         """工作线程函数"""
@@ -84,11 +84,11 @@ def demo_thread_safety():
     print("线程安全演示完成")
 
 
-def demo_log_levels():
+def test_log_levels():
     """演示日志级别控制"""
     print("\n=== 日志级别控制演示 ===")
 
-    logger = get_logger(name="level_demo", log_dir="demo_logs", prefix="level")
+    logger = get_logger(name="level_test", log_dir="test_logs", prefix="level")
 
     print(f"当前日志级别: {logger.get_level()}")
 
@@ -112,12 +112,12 @@ def demo_log_levels():
     print("日志级别控制演示完成")
 
 
-def demo_global_exception_handler():
+def test_global_exception_handler():
     """演示全局异常处理器"""
     print("\n=== 全局异常处理器演示 ===")
 
     # 设置全局异常处理器
-    logger = get_logger(name="global_demo", log_dir="demo_logs", prefix="global")
+    logger = get_logger(name="global_test", log_dir="test_logs", prefix="global")
     setup_global_exception_handler(logger)
 
     logger.info("全局异常处理器已设置")
@@ -142,15 +142,15 @@ def main():
     print("=" * 50)
 
     # 演示各个功能
-    demo_basic_logging()
-    demo_exception_logging()
-    demo_thread_safety()
-    demo_log_levels()
-    demo_global_exception_handler()
+    test_basic_logging()
+    test_exception_logging()
+    test_thread_safety()
+    test_log_levels()
+    test_global_exception_handler()
 
     print("\n" + "=" * 50)
     print("所有演示完成！")
-    print("请查看 demo_logs 目录中的日志文件")
+    print("请查看 test_logs 目录中的日志文件")
 
 
 if __name__ == "__main__":
