@@ -213,6 +213,9 @@ class SubstationClientApp:
         self.original_image = None
         self.display_image = None
         self.result_image = None
+        self.image_scale = 1.0  # 添加缩放比例属性
+        self.image_offset_x = 0  # 添加图片在Canvas中的X偏移
+        self.image_offset_y = 0  # 添加图片在Canvas中的Y偏移
         
         # 创建UI
         self._create_ui()
@@ -326,6 +329,11 @@ class SubstationClientApp:
             resized_image = self.original_image.resize((new_width, new_height), Image.LANCZOS)
             self.display_image = resized_image
             
+            # 计算图片在Canvas中的偏移量（因为是居中显示）
+            self.image_offset_x = (canvas_width - new_width) // 2
+            self.image_offset_y = (canvas_height - new_height) // 2
+            self.image_scale = scale
+            
             # 转换为Tkinter格式
             self.tk_image = ImageTk.PhotoImage(resized_image)
             
@@ -347,8 +355,29 @@ class SubstationClientApp:
     def _on_roi_complete(self, event):
         """ROI绘制完成回调"""
         if self.roi_drawer.finish_drawing(event):
-            self.status_var.set(f"ROI已划定: ({self.roi_drawer.roi['x1']}, {self.roi_drawer.roi['y1']}) - "
-                              f"({self.roi_drawer.roi['x2']}, {self.roi_drawer.roi['y2']})")
+            # 将Canvas坐标转换为原始图片坐标
+            if self.original_image and self.image_scale > 0:
+                # Canvas坐标 -> 缩放后图片坐标 -> 原始图片坐标
+                orig_x1 = max(0, (self.roi_drawer.roi['x1'] - self.image_offset_x) / self.image_scale)
+                orig_y1 = max(0, (self.roi_drawer.roi['y1'] - self.image_offset_y) / self.image_scale)
+                orig_x2 = min(self.original_image.width, (self.roi_drawer.roi['x2'] - self.image_offset_x) / self.image_scale)
+                orig_y2 = min(self.original_image.height, (self.roi_drawer.roi['y2'] - self.image_offset_y) / self.image_scale)
+                
+                # 确保坐标有效
+                if orig_x2 > orig_x1 and orig_y2 > orig_y1:
+                    self.roi_drawer.roi = {
+                        "x1": int(orig_x1),
+                        "y1": int(orig_y1), 
+                        "x2": int(orig_x2),
+                        "y2": int(orig_y2)
+                    }
+                    self.status_var.set(f"ROI已划定: ({self.roi_drawer.roi['x1']}, {self.roi_drawer.roi['y1']}) - "
+                                      f"({self.roi_drawer.roi['x2']}, {self.roi_drawer.roi['y2']})")
+                else:
+                    self.roi_drawer.clear()
+                    self.status_var.set("ROI区域无效，请重新划定")
+            else:
+                self.status_var.set("ROI区域太小，请重新划定")
         else:
             self.status_var.set("ROI区域太小，请重新划定")
             
