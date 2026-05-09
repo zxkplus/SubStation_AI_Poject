@@ -1,5 +1,4 @@
 from fastapi import FastAPI, HTTPException
-from datetime import datetime
 
 from service.inference import YOLOMaskService
 from service.logger import get_logger
@@ -32,7 +31,7 @@ def get_model(weights_path: str, device: str, conf_threshold: float, img_size: i
 def infer(request: InferenceRequest):
     try:
         ##json文件名字要带上日期时间戳，方便区分不同请求
-        request.save_to_json(f"params_log/inference_request_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        request.save_to_json(f"params_log/inference_request_{logger.now_str()}.json")
 
         logger.info(f"收到推理请求: {len(request.rois)} 个ROI, 权重: {request.weights_path}")
 
@@ -54,13 +53,9 @@ def infer(request: InferenceRequest):
         )
 
         logger.debug("开始模型推理")
-        result_dict = service.predict(image_rgb=image_rgb, rois=normalized_rois)
-        logger.info(f"推理完成: 检测到 {sum(len(r.detections) for r in result.results)} 个目标")
-
-        # 将字典结果包装为InferenceResponse对象
-        result = InferenceResponse(**result_dict)
-        # 为响应结果也添加时间戳
-        result.save_to_json(f"params_log/inference_response_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        result = service.predict(image_rgb=image_rgb, rois=normalized_rois)
+        logger.info(f"推理完成: 检测到 {sum(len(r['detections']) for r in result['results'])} 个目标")
+        result.save_to_json(f"params_log/inference_response_{logger.now_str()}.json")
 
     except Exception as exc:
         logger.exception(f"推理过程出错: {exc}")
