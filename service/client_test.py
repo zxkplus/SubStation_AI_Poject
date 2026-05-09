@@ -164,10 +164,34 @@ def test_basic_usage():
                 print(f"      边界框: {detection['bbox']}")
                 print(f"      轮廓点数: {len(detection['contours'])}")
         
-        # 保存结果为JSON
-        with open("inference_result.json", "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        print("\n✅ 结果已保存到 inference_result.json")
+        # 添加结果可视化，在原图上画出矩形框和轮廓
+        try:
+            # 加载原始图片
+            original_image = Image.open(test_image_path)
+            
+            # 使用ResultRenderer绘制结果
+            result_image = ResultRenderer.draw_results_on_image(original_image, result)
+            
+            # 生成输出文件名
+            output_filename = f"visualization_result_{int(time.time())}.jpg"
+            
+            # 保存可视化结果
+            result_image.save(output_filename)
+            print(f"\n✅ 结果可视化完成！已保存到: {output_filename}")
+            
+            # 可选：显示图片（如果在支持的环境中）
+            try:
+                result_image.show()
+                print("🖼️  已尝试在默认图片查看器中打开结果")
+            except:
+                print("ℹ️  无法自动打开图片查看器，请手动查看保存的文件")
+                
+        except Exception as e:
+            print(f"❌ 可视化失败: {e}")
+            print("💡 可能的原因:")
+            print("   - 图片路径不正确")
+            print("   - PIL/Pillow库问题")
+            print("   - 内存不足")
         
     except Exception as e:
         print(f"❌ 推理失败: {e}")
