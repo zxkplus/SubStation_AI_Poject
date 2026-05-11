@@ -23,17 +23,19 @@ import random
 class DatasetCropper:
     """数据集裁剪器（支持多线程并行处理）"""
     
-    def __init__(self, input_dataset_path: str, output_dataset_path: str):
+    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None):
         """
         初始化裁剪器
         
         Args:
             input_dataset_path: 输入数据集路径（原始数据）
             output_dataset_path: 输出数据集路径（裁剪格式）
+            ignore_classes: 要忽略的类别名称列表，在convert模式下会将这些类别的标签改为包围它的主类别标签
         """
         self.input_path = Path(input_dataset_path)
         self.output_path = Path(output_dataset_path)
         self.supported_image_formats = {'.jpg', '.jpeg', '.png', '.bmp'}
+        self.ignore_classes = set(ignore_classes) if ignore_classes else set()
         
         # 线程锁
         self._lock = threading.Lock()
@@ -74,6 +76,10 @@ class DatasetCropper:
         # 遍历第一层目录（类别）
         for category_dir in self.input_path.iterdir():
             if not category_dir.is_dir():
+                continue
+            
+            # 跳过被忽略的类别目录
+            if category_dir.name in self.ignore_classes:
                 continue
             
             # 遍历第二层目录（图片和JSON文件）
@@ -194,11 +200,37 @@ class DatasetCropper:
         results = []
         
         for i, (polygon, label) in enumerate(polygons_with_labels):
+            # 如果当前polygon是被忽略的类别，直接跳过（不作为主polygon处理）
+            if label in self.ignore_classes:
+                continue
+                
             # 检查最小尺寸
             x, y, w, h = self.get_mask_bbox(polygon)
             if w < min_size or h < min_size:
                 continue
                 
+            # 如果当前polygon是被忽略的类别，且没有与其他非忽略类别重叠，则跳过
+            if label in self.ignore_classes:
+                has_non_ignored_intersection = False
+                for j, (other_polygon, other_label) in enumerate(polygons_with_labels):
+                    if i == j:  # 跳过自己
+                        continue
+                    if other_label in self.ignore_classes:
+                        continue  # 跳过其他被忽略的类别
+                    
+                    # 检查是否与非忽略类别有重叠
+                    other_x, other_y, other_w, other_h = self.get_mask_bbox(other_polygon)
+                    if not (other_x > x + w or 
+                           x > other_x + other_w or 
+                           other_y > y + h or 
+                           y > other_y + other_h):
+                        has_non_ignored_intersection = True
+                        break
+                
+                # 如果被忽略的polygon没有与任何非忽略类别重叠，跳过处理
+                if not has_non_ignored_intersection:
+                    continue
+            
             # 计算当前polygon的边界框
             x_min = x
             y_min = y
@@ -220,7 +252,11 @@ class DatasetCropper:
                        other_y > y_min + height or 
                        y_min > other_y + other_h):
                     # 如果边界框有重叠，添加到相交polygon列表
-                    intersecting_polygons.append((other_polygon, other_label))
+                    # 如果other_label是被忽略的类别，则将其标签改为当前主类别label
+                    if other_label in self.ignore_classes:
+                        intersecting_polygons.append((other_polygon, label))
+                    else:
+                        intersecting_polygons.append((other_polygon, other_label))
             
             # 扩展边界框以包含所有相交的polygon
             actual_x_min = x_min

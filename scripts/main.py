@@ -118,7 +118,7 @@ def main():
                     parent_dir = os.path.dirname(os.path.abspath(args.dataset_path))
                     args.output_yolo_path = os.path.join(parent_dir, 'converted_dataset')
                 
-                cropper = DatasetCropper(args.dataset_path, args.output_yolo_path)
+                cropper = DatasetCropper(args.dataset_path, args.output_yolo_path, args.ignore_classes)
                 
                 # convert模式：不创建子目录，每个类别转换100张
                 cropper.convert_dataset(
