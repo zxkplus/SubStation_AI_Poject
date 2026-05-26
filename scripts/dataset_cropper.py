@@ -119,9 +119,9 @@ class DatasetCropper:
         
         return dict(dataset_structure)
     
-    def parse_json_polygons(self, json_data: dict, img_height: int = 0, img_width: int = 0) -> List[Tuple[List[List[float]], str]]:
+    def parse_json_shapes(self, json_data: dict, img_height: int = 0, img_width: int = 0) -> Tuple[List[Tuple[List[List[float]], str, str]], List[Tuple[List[List[float]], str, str]]]:
         """
-        解析JSON标注中的polygon信息和标签（直接返回坐标，不转mask）
+        解析JSON标注中的所有形状信息（包括矩形和多边形）
         
         Args:
             json_data: JSON标注数据
@@ -129,11 +129,14 @@ class DatasetCropper:
             img_width: 图片宽度（用于确定坐标范围）
             
         Returns:
-            [(polygon, label), ...] - polygon格式: [[x1, y1], [x2, y2], ...]
+            (rectangles, polygons) - 
+            rectangles: [(rectangle_points, label, 'rectangle'), ...] 
+            polygons: [(polygon_points, label, 'polygon'), ...]
         """
-        results = []
+        rectangles = []
+        polygons = []
         
-        # 格式1: COCO格式（segmentation）
+        # 格式1: COCO格式（segmentation）- 只处理多边形
         if 'segmentation' in json_data:
             segmentation = json_data['segmentation']
             category_name = json_data.get('category_name', json_data.get('label', 'object'))
@@ -143,28 +146,99 @@ class DatasetCropper:
                     # polygon格式可能是 [x1, y1, x2, y2, ...] 或 [[x1, y1], [x2, y2], ...]
                     if len(polygon) > 0 and isinstance(polygon[0], list):
                         # [[x1, y1], [x2, y2], ...] 格式
-                        results.append((polygon, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}"))
+                        polygons.append((polygon, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}", "polygon"))
                     else:
                         # [x1, y1, x2, y2, ...] 格式，转为 [[x1, y1], [x2, y2], ...]
                         converted = [[polygon[i], polygon[i+1]] for i in range(0, len(polygon), 2)]
-                        results.append((converted, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}"))
+                        polygons.append((converted, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}", "polygon"))
         
         # 格式2: LabelMe格式（shapes）
         elif 'shapes' in json_data:
             for shape in json_data['shapes']:
-                if shape['shape_type'] == 'polygon':
-                    points = shape['points']
-                    label = shape.get('label', 'object')
-                    # 确保是 [[x1, y1], [x2, y2], ...] 格式
-                    if len(points) > 0 and isinstance(points[0], list):
-                        results.append((points, label))
-                    else:
-                        # [x1, y1, x2, y2, ...] 格式
-                        converted = [[points[i], points[i+1]] for i in range(0, len(points), 2)]
-                        results.append((converted, label))
+                points = shape['points']
+                label = shape.get('label', 'object')
+                shape_type = shape.get('shape_type', 'polygon')
+                
+                # 确保是 [[x1, y1], [x2, y2], ...] 格式
+                if len(points) > 0 and isinstance(points[0], list):
+                    formatted_points = points
+                else:
+                    # [x1, y1, x2, y2, ...] 格式
+                    formatted_points = [[points[i], points[i+1]] for i in range(0, len(points), 2)]
+                
+                if shape_type == 'rectangle':
+                    # 矩形格式：[[x1, y1], [x2, y2]] 表示对角线两点
+                    rectangles.append((formatted_points, label, shape_type))
+                elif shape_type == 'polygon':
+                    polygons.append((formatted_points, label, shape_type))
+                # 其他形状类型暂时忽略
         
-        return results
+        return rectangles, polygons
     
+    def get_rectangle_bbox(self, rectangle_points: List[List[float]]) -> Tuple[int, int, int, int]:
+        """
+        获取矩形的边界框（矩形本身就是边界框）
+        
+        Args:
+            rectangle_points: 矩形的两个对角点 [[x1, y1], [x2, y2]]
+            
+        Returns:
+            (x, y, w, h) - 左上角坐标和宽高
+        """
+        if len(rectangle_points) != 2:
+            # 如果不是标准的两个点矩形，尝试计算外接矩形
+            return self.get_mask_bbox(rectangle_points)
+            
+        x1, y1 = rectangle_points[0]
+        x2, y2 = rectangle_points[1]
+        
+        x_min = int(min(x1, x2))
+        y_min = int(min(y1, y2))
+        x_max = int(max(x1, x2))
+        y_max = int(max(y1, y2))
+        
+        return (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
+    
+    def point_in_rectangle(self, point: List[float], rect_points: List[List[float]]) -> bool:
+        """
+        检查点是否在矩形内
+        
+        Args:
+            point: [x, y] 坐标
+            rect_points: 矩形的两个对角点 [[x1, y1], [x2, y2]]
+            
+        Returns:
+            bool: 是否在矩形内
+        """
+        if len(rect_points) != 2:
+            return False
+            
+        x1, y1 = rect_points[0]
+        x2, y2 = rect_points[1]
+        
+        # 确保x1,y1是左上角，x2,y2是右下角
+        min_x, max_x = min(x1, x2), max(x1, x2)
+        min_y, max_y = min(y1, y2), max(y1, y2)
+        
+        px, py = point
+        return min_x <= px <= max_x and min_y <= py <= max_y
+
+    def polygon_in_rectangle(self, polygon: List[List[float]], rect_points: List[List[float]]) -> bool:
+        """
+        检查多边形是否在矩形内（至少有一个点在矩形内）
+        
+        Args:
+            polygon: 多边形坐标 [[x1, y1], [x2, y2], ...]
+            rect_points: 矩形的两个对角点 [[x1, y1], [x2, y2]]
+            
+        Returns:
+            bool: 是否有交集
+        """
+        for point in polygon:
+            if self.point_in_rectangle(point, rect_points):
+                return True
+        return False
+
     def get_mask_bbox(self, polygon: List[List[float]]) -> Tuple[int, int, int, int]:
         """
         获取polygon的外接矩形边界框
@@ -186,6 +260,15 @@ class DatasetCropper:
         
         return (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
     
+    def parse_json_polygons(self, json_data: dict, img_height: int = 0, img_width: int = 0) -> List[Tuple[List[List[float]], str]]:
+        """
+        解析JSON标注中的polygon信息和标签（直接返回坐标，不转mask）
+        为了向后兼容，这个方法只返回多边形，不包含矩形
+        """
+        rectangles, polygons = self.parse_json_shapes(json_data, img_height, img_width)
+        # 只返回多边形，保持原有接口兼容性
+        return [(poly, label) for poly, label, _ in polygons]
+    
     def crop_and_convert(
         self, 
         img_path: str, 
@@ -195,6 +278,7 @@ class DatasetCropper:
     ) -> Optional[List[Tuple[np.ndarray, List[Tuple[List[List[float]], str]], Tuple[int, int, int, int], dict]]]:
         """
         裁剪图片并转换标注（每个polygon单独裁剪，变换坐标）
+        新逻辑：优先处理矩形标注，以矩形为边界裁剪并保留框内所有标注
         
         Args:
             img_path: 图片路径
@@ -216,16 +300,68 @@ class DatasetCropper:
         with open(json_path, 'r', encoding='utf-8') as f:
             json_data = json.load(f)
         
-        # 解析polygons
-        polygons_with_labels = self.parse_json_polygons(json_data, img_height, img_width)
+        # 解析所有形状（包括矩形和多边形）
+        rectangles, polygons_with_labels = self.parse_json_shapes(json_data)
         
-        if not polygons_with_labels:
+        # 如果既没有矩形也没有多边形，返回None
+        if not rectangles and not polygons_with_labels:
             return None
         
-        # 为每个有效的polygon创建单独的裁剪结果
         results = []
+        processed_polygons = set()  # 记录已经被矩形处理过的多边形索引
         
-        for i, (polygon, label) in enumerate(polygons_with_labels):
+        # 第一步：处理矩形标注
+        for rect_idx, (rect_points, rect_label, _) in enumerate(rectangles):
+            # 获取矩形边界框
+            rect_bbox = self.get_rectangle_bbox(rect_points)
+            x_min, y_min, width, height = rect_bbox
+            
+            # 检查最小尺寸（使用矩形尺寸）
+            if width < min_size or height < min_size:
+                continue
+            
+            # 找到在矩形内的所有多边形
+            contained_polygons = []
+            for i, (poly_points, poly_label, _) in enumerate(polygons_with_labels):
+                if self.polygon_in_rectangle(poly_points, rect_points):
+                    # 如果多边形在矩形内，添加到包含列表
+                    # 如果多边形是被忽略的类别，则使用矩形标签
+                    if poly_label in self.ignore_classes:
+                        contained_polygons.append((poly_points, rect_label))
+                    else:
+                        contained_polygons.append((poly_points, poly_label))
+                    processed_polygons.add(i)
+            
+            # 扩展边界框
+            if expand_ratio > 0:
+                expand_w = int(width * expand_ratio)
+                expand_h = int(height * expand_ratio)
+                x_min = max(0, x_min - expand_w)
+                y_min = max(0, y_min - expand_h)
+                width = min(img_width - x_min, width + 2 * expand_w)
+                height = min(img_height - y_min, height + 2 * expand_h)
+            
+            # 裁剪图片
+            cropped_img = img[y_min:y_min+height, x_min:x_min+width]
+            
+            # 变换所有包含的多边形坐标
+            transformed_polygons = []
+            for poly_points, poly_label in contained_polygons:
+                new_polygon = []
+                for point in poly_points:
+                    new_x = point[0] - x_min
+                    new_y = point[1] - y_min
+                    new_polygon.append([new_x, new_y])
+                transformed_polygons.append((new_polygon, poly_label))
+            
+            results.append((cropped_img, transformed_polygons, (x_min, y_min, width, height), json_data))
+        
+        # 第二步：处理未被矩形包含的多边形
+        for i, (polygon, label, _) in enumerate(polygons_with_labels):
+            if i in processed_polygons:
+                # 已经被矩形处理过，跳过
+                continue
+                
             # 如果当前polygon是被忽略的类别，直接跳过（不作为主polygon处理）
             if label in self.ignore_classes:
                 continue
@@ -238,8 +374,8 @@ class DatasetCropper:
             # 如果当前polygon是被忽略的类别，且没有与其他非忽略类别重叠，则跳过
             if label in self.ignore_classes:
                 has_non_ignored_intersection = False
-                for j, (other_polygon, other_label) in enumerate(polygons_with_labels):
-                    if i == j:  # 跳过自己
+                for j, (other_polygon, other_label, _) in enumerate(polygons_with_labels):
+                    if i == j or j in processed_polygons:  # 跳过自己和已处理的
                         continue
                     if other_label in self.ignore_classes:
                         continue  # 跳过其他被忽略的类别
@@ -263,10 +399,10 @@ class DatasetCropper:
             width = w
             height = h
             
-            # 找到在当前边界框内的其他polygon
+            # 找到在当前边界框内的其他polygon（只考虑未被处理的）
             intersecting_polygons = [(polygon, label)]  # 包含当前polygon
-            for j, (other_polygon, other_label) in enumerate(polygons_with_labels):
-                if i == j:  # 跳过自己
+            for j, (other_polygon, other_label, _) in enumerate(polygons_with_labels):
+                if i == j or j in processed_polygons:  # 跳过自己和已处理的
                     continue
                     
                 # 检查其他polygon是否与当前边界框相交
