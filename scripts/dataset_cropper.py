@@ -64,32 +64,58 @@ class DatasetCropper:
                 for cls, size in size_dist.items():
                     self.stats['image_sizes'][cls].append(size)
     
-    def load_dataset_structure(self) -> Dict[str, List[Tuple[str, str]]]:
+    def load_dataset_structure(self, recursive: bool = False) -> Dict[str, List[Tuple[str, str]]]:
         """
         加载数据集目录结构
         
+        Args:
+            recursive: 是否递归查找所有子目录中的文件
+            
         Returns:
             {类别名: [(图片路径, json路径), ...]}
         """
         dataset_structure = defaultdict(list)
         
-        # 遍历第一层目录（类别）
-        for category_dir in self.input_path.iterdir():
-            if not category_dir.is_dir():
-                continue
-            
-            # 跳过被忽略的类别目录
-            if category_dir.name in self.ignore_classes:
-                continue
-            
-            # 遍历第二层目录（图片和JSON文件）
-            for file_path in category_dir.iterdir():
+        if recursive:
+            # 递归模式：查找所有子目录中的图片和JSON文件
+            for file_path in self.input_path.rglob('*'):
                 if file_path.suffix.lower() in self.supported_image_formats:
                     json_path = file_path.with_suffix('.json')
                     if json_path.exists():
-                        dataset_structure[category_dir.name].append(
+                        # 确定类别名：使用相对于输入路径的父目录名作为类别名
+                        rel_path = file_path.relative_to(self.input_path)
+                        if len(rel_path.parts) > 1:
+                            # 如果文件在子目录中，使用最接近的父目录名作为类别名
+                            category_name = rel_path.parts[-2]
+                        else:
+                            # 如果文件在根目录，使用默认类别名
+                            category_name = "default"
+                        
+                        # 跳过被忽略的类别
+                        if category_name in self.ignore_classes:
+                            continue
+                            
+                        dataset_structure[category_name].append(
                             (str(file_path), str(json_path))
                         )
+        else:
+            # 非递归模式：只遍历第一层目录（类别）
+            for category_dir in self.input_path.iterdir():
+                if not category_dir.is_dir():
+                    continue
+                
+                # 跳过被忽略的类别目录
+                if category_dir.name in self.ignore_classes:
+                    continue
+                
+                # 遍历第二层目录（图片和JSON文件）
+                for file_path in category_dir.iterdir():
+                    if file_path.suffix.lower() in self.supported_image_formats:
+                        json_path = file_path.with_suffix('.json')
+                        if json_path.exists():
+                            dataset_structure[category_dir.name].append(
+                                (str(file_path), str(json_path))
+                            )
         
         return dict(dataset_structure)
     
@@ -460,6 +486,7 @@ class DatasetCropper:
         output_images_subdir: str = "",
         output_labels_subdir: str = "",
         preserve_category_structure: bool = True,
+        recursive: bool = False,
         num_workers: int = 8
     ):
         """
@@ -472,6 +499,7 @@ class DatasetCropper:
             output_images_subdir: 输出图片子目录名（空字符串表示不创建子目录）
             output_labels_subdir: 输出标签子目录名（空字符串表示不创建子目录）
             preserve_category_structure: 是否保留类别目录结构（默认为True）
+            recursive: 是否递归查找所有子目录中的文件（默认为False）
             num_workers: 并行处理的线程数（默认为8）
         """
         print("=" * 60)
@@ -485,12 +513,13 @@ class DatasetCropper:
         self.output_path.mkdir(parents=True, exist_ok=True)
         
         # 加载数据集结构
-        dataset_structure = self.load_dataset_structure()
+        dataset_structure = self.load_dataset_structure(recursive=recursive)
         
         print(f"输入数据集: {self.input_path}")
         print(f"输出数据集: {self.output_path}")
         print(f"发现 {len(dataset_structure)} 个类别")
         print(f"保留类别目录: {preserve_category_structure}")
+        print(f"递归模式: {recursive}")
         print()
         
         # 重置统计信息
