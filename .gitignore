@@ -21,7 +21,9 @@ test_data
 test_output
 logs
 demo_logs
-runs
+runs*/
+params_log
+statistic/check_servers.py
 
 # 视频文件
 *.mp4
