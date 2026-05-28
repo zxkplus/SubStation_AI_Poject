@@ -110,7 +110,26 @@ def main():
         help='要忽略的类别名称列表（用于yolo模式），这些类别将不会包含在输出数据集中'
     )
     
+    # 新增：类别映射文件参数
+    parser.add_argument(
+        '--class_mapping_file',
+        type=str,
+        default=None,
+        help='类别映射文件路径，用于将中文类别名映射为英文类别名（格式：中文:英文）'
+    )
+    
     args = parser.parse_args()
+    
+    # 处理逗号分隔的 ignore_classes 参数
+    if args.ignore_classes:
+        processed_ignore_classes = []
+        for item in args.ignore_classes:
+            # 如果包含逗号，分割成多个类别
+            if ',' in item:
+                processed_ignore_classes.extend([cls.strip() for cls in item.split(',') if cls.strip()])
+            else:
+                processed_ignore_classes.append(item)
+        args.ignore_classes = processed_ignore_classes
     
     print("=" * 60)
     print("变电站设备分割数据集处理工具集")
@@ -167,7 +186,7 @@ def main():
                         continue
                     
                     print(f"处理数据集: {dataset_path}")
-                    cropper = DatasetCropper(dataset_path, args.output_yolo_path, args.ignore_classes)
+                    cropper = DatasetCropper(dataset_path, args.output_yolo_path, args.ignore_classes, args.class_mapping_file)
                     
                     # convert模式：不创建子目录，每个类别转换100张
                     # 当处理多个数据集时，不保留类别目录结构以避免冲突

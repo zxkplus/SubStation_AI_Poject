@@ -23,7 +23,7 @@ import random
 class DatasetCropper:
     """数据集裁剪器（支持多线程并行处理）"""
     
-    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None):
+    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None, class_mapping_file: str = None):
         """
         初始化裁剪器
         
@@ -31,11 +31,13 @@ class DatasetCropper:
             input_dataset_path: 输入数据集路径（原始数据）
             output_dataset_path: 输出数据集路径（裁剪格式）
             ignore_classes: 要忽略的类别名称列表，在convert模式下会将这些类别的标签改为包围它的主类别标签
+            class_mapping_file: 类别映射文件路径，用于将中文类别名映射为英文类别名
         """
         self.input_path = Path(input_dataset_path)
         self.output_path = Path(output_dataset_path)
         self.supported_image_formats = {'.jpg', '.jpeg', '.png', '.bmp'}
         self.ignore_classes = set(ignore_classes) if ignore_classes else set()
+        self.class_mapping = self._load_class_mapping(class_mapping_file) if class_mapping_file else {}
         
         # 线程锁
         self._lock = threading.Lock()
@@ -49,6 +51,28 @@ class DatasetCropper:
             'class_distribution': defaultdict(int),
             'image_sizes': defaultdict(list)  # {类别名: [(width, height), ...]}
         }
+    
+    def _load_class_mapping(self, mapping_file: str) -> Dict[str, str]:
+        """加载类别映射文件"""
+        mapping = {}
+        try:
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):  # 跳过空行和注释行
+                        if ':' in line:
+                            chinese_name, english_name = line.split(':', 1)
+                            chinese_name = chinese_name.strip()
+                            english_name = english_name.strip()
+                            if chinese_name and english_name:
+                                mapping[chinese_name] = english_name
+        except Exception as e:
+            print(f"警告: 加载类别映射文件失败: {str(e)}")
+        return mapping
+    
+    def _map_class_name(self, class_name: str) -> str:
+        """映射类别名，如果存在映射则返回映射后的名称，否则返回原名称"""
+        return self.class_mapping.get(class_name, class_name)
     
     def _update_stats(self, converted: int = 0, skipped: int = 0, masks: int = 0,
                       class_dist: Dict[str, int] = None, size_dist: Dict[str, Tuple[int, int]] = None):
@@ -118,62 +142,6 @@ class DatasetCropper:
                             )
         
         return dict(dataset_structure)
-    
-    def parse_json_shapes(self, json_data: dict, img_height: int = 0, img_width: int = 0) -> Tuple[List[Tuple[List[List[float]], str, str]], List[Tuple[List[List[float]], str, str]]]:
-        """
-        解析JSON标注中的所有形状信息（包括矩形和多边形）
-        
-        Args:
-            json_data: JSON标注数据
-            img_height: 图片高度（用于确定坐标范围）
-            img_width: 图片宽度（用于确定坐标范围）
-            
-        Returns:
-            (rectangles, polygons) - 
-            rectangles: [(rectangle_points, label, 'rectangle'), ...] 
-            polygons: [(polygon_points, label, 'polygon'), ...]
-        """
-        rectangles = []
-        polygons = []
-        
-        # 格式1: COCO格式（segmentation）- 只处理多边形
-        if 'segmentation' in json_data:
-            segmentation = json_data['segmentation']
-            category_name = json_data.get('category_name', json_data.get('label', 'object'))
-            
-            if isinstance(segmentation, list):
-                for idx, polygon in enumerate(segmentation):
-                    # polygon格式可能是 [x1, y1, x2, y2, ...] 或 [[x1, y1], [x2, y2], ...]
-                    if len(polygon) > 0 and isinstance(polygon[0], list):
-                        # [[x1, y1], [x2, y2], ...] 格式
-                        polygons.append((polygon, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}", "polygon"))
-                    else:
-                        # [x1, y1, x2, y2, ...] 格式，转为 [[x1, y1], [x2, y2], ...]
-                        converted = [[polygon[i], polygon[i+1]] for i in range(0, len(polygon), 2)]
-                        polygons.append((converted, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}", "polygon"))
-        
-        # 格式2: LabelMe格式（shapes）
-        elif 'shapes' in json_data:
-            for shape in json_data['shapes']:
-                points = shape['points']
-                label = shape.get('label', 'object')
-                shape_type = shape.get('shape_type', 'polygon')
-                
-                # 确保是 [[x1, y1], [x2, y2], ...] 格式
-                if len(points) > 0 and isinstance(points[0], list):
-                    formatted_points = points
-                else:
-                    # [x1, y1, x2, y2, ...] 格式
-                    formatted_points = [[points[i], points[i+1]] for i in range(0, len(points), 2)]
-                
-                if shape_type == 'rectangle':
-                    # 矩形格式：[[x1, y1], [x2, y2]] 表示对角线两点
-                    rectangles.append((formatted_points, label, shape_type))
-                elif shape_type == 'polygon':
-                    polygons.append((formatted_points, label, shape_type))
-                # 其他形状类型暂时忽略
-        
-        return rectangles, polygons
     
     def get_rectangle_bbox(self, rectangle_points: List[List[float]]) -> Tuple[int, int, int, int]:
         """
@@ -260,12 +228,70 @@ class DatasetCropper:
         
         return (x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
     
-    def parse_json_polygons(self, json_data: dict, img_height: int = 0, img_width: int = 0) -> List[Tuple[List[List[float]], str]]:
+    def parse_json_shapes(self, json_data: dict) -> Tuple[List[Tuple[List[List[float]], str, str]], List[Tuple[List[List[float]], str, str]]]:
+        """
+        解析JSON标注中的所有形状信息（包括矩形和多边形）
+        
+        Args:
+            json_data: JSON标注数据
+            
+        Returns:
+            (rectangles, polygons) - 
+            rectangles: [(rectangle_points, label, shape_type), ...] 
+            polygons: [(polygon_points, label, shape_type), ...]
+        """
+        rectangles = []
+        polygons = []
+        
+        # 格式1: COCO格式（segmentation）- 只处理多边形
+        if 'segmentation' in json_data:
+            segmentation = json_data['segmentation']
+            category_name = json_data.get('category_name', json_data.get('label', 'object'))
+            # 应用类别映射
+            category_name = self._map_class_name(category_name)
+            
+            if isinstance(segmentation, list):
+                for idx, polygon in enumerate(segmentation):
+                    # polygon格式可能是 [x1, y1, x2, y2, ...] 或 [[x1, y1], [x2, y2], ...]
+                    if len(polygon) > 0 and isinstance(polygon[0], list):
+                        # [[x1, y1], [x2, y2], ...] 格式
+                        polygons.append((polygon, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}", "polygon"))
+                    else:
+                        # [x1, y1, x2, y2, ...] 格式，转为 [[x1, y1], [x2, y2], ...]
+                        converted = [[polygon[i], polygon[i+1]] for i in range(0, len(polygon), 2)]
+                        polygons.append((converted, category_name if len(segmentation) == 1 else f"{category_name}_{idx+1}", "polygon"))
+        
+        # 格式2: LabelMe格式（shapes）
+        elif 'shapes' in json_data:
+            for shape in json_data['shapes']:
+                points = shape['points']
+                label = shape.get('label', 'object')
+                # 应用类别映射
+                label = self._map_class_name(label)
+                shape_type = shape.get('shape_type', 'polygon')
+                
+                # 确保是 [[x1, y1], [x2, y2], ...] 格式
+                if len(points) > 0 and isinstance(points[0], list):
+                    formatted_points = points
+                else:
+                    # [x1, y1, x2, y2, ...] 格式
+                    formatted_points = [[points[i], points[i+1]] for i in range(0, len(points), 2)]
+                
+                if shape_type == 'rectangle':
+                    # 矩形格式：[[x1, y1], [x2, y2]] 表示对角线两点
+                    rectangles.append((formatted_points, label, shape_type))
+                elif shape_type == 'polygon':
+                    polygons.append((formatted_points, label, shape_type))
+                # 其他形状类型暂时忽略
+        
+        return rectangles, polygons
+    
+    def parse_json_polygons(self, json_data: dict) -> List[Tuple[List[List[float]], str]]:
         """
         解析JSON标注中的polygon信息和标签（直接返回坐标，不转mask）
         为了向后兼容，这个方法只返回多边形，不包含矩形
         """
-        rectangles, polygons = self.parse_json_shapes(json_data, img_height, img_width)
+        rectangles, polygons = self.parse_json_shapes(json_data)
         # 只返回多边形，保持原有接口兼容性
         return [(poly, label) for poly, label, _ in polygons]
     
