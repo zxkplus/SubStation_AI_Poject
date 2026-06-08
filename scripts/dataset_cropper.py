@@ -235,6 +235,23 @@ class DatasetCropper:
             return None
         
         try:
+            # 验证和清理输入多边形
+            if len(polygon) < 3:
+                return None
+            
+            # 移除重复的连续点
+            cleaned_polygon = []
+            for i, point in enumerate(polygon):
+                if i == 0 or point != polygon[i-1]:
+                    cleaned_polygon.append(point)
+            
+            if len(cleaned_polygon) < 3:
+                return None
+            
+            # 确保多边形是闭合的（首尾点相同）
+            if cleaned_polygon[0] != cleaned_polygon[-1]:
+                cleaned_polygon.append(cleaned_polygon[0])
+            
             # 创建矩形对象
             x1, y1 = rect_points[0]
             x2, y2 = rect_points[1]
@@ -242,8 +259,16 @@ class DatasetCropper:
             min_y, max_y = min(y1, y2), max(y1, y2)
             rect = box(min_x, min_y, max_x, max_y)
             
-            # 创建多边形对象
-            poly = Polygon(polygon)
+            # 创建多边形对象并验证
+            poly = Polygon(cleaned_polygon)
+            if not poly.is_valid:
+                # 尝试修复无效多边形
+                poly = poly.buffer(0)
+                if not poly.is_valid:
+                    # 如果仍然无效，回退到简单逻辑
+                    if self.polygon_in_rectangle(polygon, rect_points):
+                        return polygon
+                    return None
             
             # 计算交集
             intersection = poly.intersection(rect)
@@ -259,15 +284,24 @@ class DatasetCropper:
                 # 移除最后一个重复的点（shapely会闭合多边形）
                 if len(coords) > 1 and coords[0] == coords[-1]:
                     coords = coords[:-1]
-                return [[x, y] for x, y in coords]
+                if len(coords) >= 3:
+                    return [[x, y] for x, y in coords]
+                else:
+                    return None
             
             elif intersection.geom_type == 'MultiPolygon':
                 # 多个多边形，返回最大的那个
-                largest_poly = max(intersection.geoms, key=lambda p: p.area)
+                valid_polygons = [p for p in intersection.geoms if p.is_valid and p.area > 0]
+                if not valid_polygons:
+                    return None
+                largest_poly = max(valid_polygons, key=lambda p: p.area)
                 coords = list(largest_poly.exterior.coords)
                 if len(coords) > 1 and coords[0] == coords[-1]:
                     coords = coords[:-1]
-                return [[x, y] for x, y in coords]
+                if len(coords) >= 3:
+                    return [[x, y] for x, y in coords]
+                else:
+                    return None
             
             elif intersection.geom_type == 'LineString' or intersection.geom_type == 'Point':
                 # 交集退化为线或点，忽略
