@@ -117,7 +117,15 @@ def main():
         default=None,
         help='类别映射文件路径，用于将中文类别名映射为英文类别名（格式：中文:英文）'
     )
-    
+
+    # 矩形优先策略开关
+    parser.add_argument(
+        '--enable_rectangle',
+        action='store_true',
+        default=False,
+        help='启用矩形优先策略（默认关闭），启用后会优先以矩形标注为边界裁剪，保留矩形内的所有多边形标注'
+    )
+
     args = parser.parse_args()
     
     # 处理逗号分隔的 ignore_classes 参数
@@ -186,7 +194,7 @@ def main():
                         continue
                     
                     print(f"处理数据集: {dataset_path}")
-                    cropper = DatasetCropper(dataset_path, args.output_yolo_path, args.ignore_classes, args.class_mapping_file)
+                    cropper = DatasetCropper(dataset_path, args.output_yolo_path, args.ignore_classes, args.class_mapping_file, enable_rectangle=args.enable_rectangle)
                     
                     # convert模式：不创建子目录，每个类别转换100张
                     # 当处理多个数据集时，不保留类别目录结构以避免冲突
