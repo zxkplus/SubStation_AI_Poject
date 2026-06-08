@@ -19,6 +19,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import random
 
+# 尝试导入shapely用于多边形裁剪
+try:
+    from shapely.geometry import Polygon, box
+    SHAPELY_AVAILABLE = True
+except ImportError:
+    SHAPELY_AVAILABLE = False
+
 
 class DatasetCropper:
     """数据集裁剪器（支持多线程并行处理）"""
@@ -208,6 +215,78 @@ class DatasetCropper:
             if self.point_in_rectangle(point, rect_points):
                 return True
         return False
+    
+    def clip_polygon_to_rectangle(self, polygon: List[List[float]], rect_points: List[List[float]]) -> Optional[List[List[float]]]:
+        """
+        计算多边形与矩形的交集，返回裁剪后的多边形
+        
+        Args:
+            polygon: 多边形坐标 [[x1, y1], [x2, y2], ...]
+            rect_points: 矩形的两个对角点 [[x1, y1], [x2, y2]]
+            
+        Returns:
+            裁剪后的多边形坐标，如果无交集则返回None
+        """
+        if not SHAPELY_AVAILABLE:
+            # 如果shapely不可用，回退到简单逻辑：检查是否有任何点在矩形内
+            # 如果有，返回原多边形（保持向后兼容）
+            if self.polygon_in_rectangle(polygon, rect_points):
+                return polygon
+            return None
+        
+        try:
+            # 创建矩形对象
+            x1, y1 = rect_points[0]
+            x2, y2 = rect_points[1]
+            min_x, max_x = min(x1, x2), max(x1, x2)
+            min_y, max_y = min(y1, y2), max(y1, y2)
+            rect = box(min_x, min_y, max_x, max_y)
+            
+            # 创建多边形对象
+            poly = Polygon(polygon)
+            
+            # 计算交集
+            intersection = poly.intersection(rect)
+            
+            # 如果交集为空，返回None
+            if intersection.is_empty:
+                return None
+            
+            # 处理不同类型的几何体
+            if intersection.geom_type == 'Polygon':
+                # 单个多边形
+                coords = list(intersection.exterior.coords)
+                # 移除最后一个重复的点（shapely会闭合多边形）
+                if len(coords) > 1 and coords[0] == coords[-1]:
+                    coords = coords[:-1]
+                return [[x, y] for x, y in coords]
+            
+            elif intersection.geom_type == 'MultiPolygon':
+                # 多个多边形，返回最大的那个
+                largest_poly = max(intersection.geoms, key=lambda p: p.area)
+                coords = list(largest_poly.exterior.coords)
+                if len(coords) > 1 and coords[0] == coords[-1]:
+                    coords = coords[:-1]
+                return [[x, y] for x, y in coords]
+            
+            elif intersection.geom_type == 'LineString' or intersection.geom_type == 'Point':
+                # 交集退化为线或点，忽略
+                return None
+            
+            else:
+                # 其他类型，尝试提取坐标
+                if hasattr(intersection, 'coords'):
+                    coords = list(intersection.coords)
+                    if len(coords) >= 3:
+                        return [[x, y] for x, y in coords]
+                return None
+                
+        except Exception as e:
+            # 如果出错，回退到简单逻辑
+            print(f"警告: 多边形裁剪失败: {str(e)}")
+            if self.polygon_in_rectangle(polygon, rect_points):
+                return polygon
+            return None
 
     def get_mask_bbox(self, polygon: List[List[float]]) -> Tuple[int, int, int, int]:
         """
@@ -282,7 +361,7 @@ class DatasetCropper:
                 if shape_type == 'rectangle':
                     # 矩形格式：[[x1, y1], [x2, y2]] 表示对角线两点
                     rectangles.append((formatted_points, label, shape_type))
-                elif shape_type == 'polygon':
+                elif shape_type == 'polygon' or shape_type == 'linestrip':
                     polygons.append((formatted_points, label, shape_type))
                 # 其他形状类型暂时忽略
         
@@ -349,16 +428,26 @@ class DatasetCropper:
                 if width < min_size or height < min_size:
                     continue
 
-                # 找到在矩形内的所有多边形
+                # 找到在矩形内的所有多边形，并计算交集
                 contained_polygons = []
                 for i, (poly_points, poly_label, _) in enumerate(polygons_with_labels):
+                    # 检查多边形是否与矩形有交集
                     if self.polygon_in_rectangle(poly_points, rect_points):
                         # 如果多边形是被忽略的类别，直接丢弃
                         if poly_label in self.ignore_classes:
                             processed_polygons.add(i)
                             continue
-                        contained_polygons.append((poly_points, poly_label))
+                        
+                        # 计算多边形与矩形的交集
+                        clipped_polygon = self.clip_polygon_to_rectangle(poly_points, rect_points)
+                        if clipped_polygon is not None and len(clipped_polygon) >= 3:
+                            contained_polygons.append((clipped_polygon, poly_label))
+                        
                         processed_polygons.add(i)
+
+                # 如果没有有效的多边形，跳过这个矩形
+                if not contained_polygons:
+                    continue
 
                 # 扩展边界框
                 if expand_ratio > 0:
