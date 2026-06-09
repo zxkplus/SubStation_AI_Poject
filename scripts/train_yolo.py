@@ -69,21 +69,30 @@ def generate_data_yaml(
     with open(classes_file, 'r', encoding='utf-8') as f:
         original_classes = [line.strip().split(' ', 1)[1] for line in f if line.strip()]
     
-    # 过滤要忽略的类别
+    # 过滤要忽略的类别，构建旧ID→新ID的映射表
     filtered_classes = [c for c in original_classes if c not in ignore_classes]
-    
+
     if len(filtered_classes) == 0:
         raise ValueError(f"所有类别都被忽略！原类别: {original_classes}, 忽略: {ignore_classes}")
-    
+
+    # 构建 old_class_id → new_class_id 映射（用于更新标签文件中的类别ID）
+    old_id_to_new_id = {}
+    new_id = 0
+    for old_id, class_name in enumerate(original_classes):
+        if class_name not in ignore_classes:
+            old_id_to_new_id[old_id] = new_id
+            new_id += 1
+
     if len(filtered_classes) != len(original_classes):
         logger.info(f"已过滤类别: {set(original_classes) - set(filtered_classes)}")
         logger.info(f"剩余类别: {filtered_classes}")
+        logger.info(f"类别ID映射: {old_id_to_new_id}")
 
     # 检查是否存在train/val/test目录结构
     train_dir = dataset_path / 'train'
     val_dir = dataset_path / 'val'
     test_dir = dataset_path / 'test'
-    
+
     has_standard_structure = train_dir.exists() and val_dir.exists()
 
     # 构建配置
@@ -91,6 +100,8 @@ def generate_data_yaml(
         'path': str(dataset_path.absolute()),
         'nc': len(filtered_classes),
         'names': {i: name for i, name in enumerate(filtered_classes)},
+        # 保存旧ID→新ID映射供 prepare_dataset 使用
+        '_old_id_to_new_id': old_id_to_new_id,
         'img_size': 640,
         'epochs': 300,
         'batch_size': 32,
@@ -108,18 +119,65 @@ def generate_data_yaml(
         config['train'] = 'train'  # 训练集会由prepare_dataset函数创建
         config['val'] = 'val'      # 验证集会由prepare_dataset函数创建
 
-    # 保存配置
+    # 保存配置（移除内部字段 _old_id_to_new_id）
+    config_for_save = {k: v for k, v in config.items() if not k.startswith('_')}
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, 'w', encoding='utf-8') as f:
-        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+        yaml.dump(config_for_save, f, default_flow_style=False, allow_unicode=True)
 
     logger.info(f"数据集配置文件已生成: {output_path}")
     logger.info(f"类别数量: {len(filtered_classes)}")
     logger.info(f"类别列表: {filtered_classes}")
 
-    return output_path
+    return output_path, old_id_to_new_id
+
+
+def remap_label_class_ids(label_dir: Path, old_id_to_new_id: dict):
+    """
+    重新映射标签文件中的类别ID（用于ignore_classes过滤后）
+
+    Args:
+        label_dir: 标签文件目录
+        old_id_to_new_id: 旧类别ID到新类别ID的映射字典
+    """
+    if not old_id_to_new_id or not label_dir.exists():
+        return
+
+    remapped_count = 0
+    for label_file in label_dir.glob('*.txt'):
+        with open(label_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        remapped_lines = []
+        changed = False
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                remapped_lines.append(line)
+                continue
+            try:
+                old_id = int(parts[0])
+                if old_id in old_id_to_new_id:
+                    new_id = old_id_to_new_id[old_id]
+                    if new_id != old_id:
+                        parts[0] = str(new_id)
+                        changed = True
+                remapped_lines.append(' '.join(parts))
+            except ValueError:
+                remapped_lines.append(line)
+
+        if changed:
+            with open(label_file, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(remapped_lines) + '\n')
+            remapped_count += 1
+
+    if remapped_count > 0:
+        logger.info(f"已重新映射 {remapped_count} 个标签文件的类别ID")
 
 
 def filter_label_file(label_path, class_mapping, ignore_classes):
@@ -532,6 +590,8 @@ def main():
                         help='早停耐心值')
     parser.add_argument('--ignore_classes', type=str, nargs='*', default=[],
                         help='要忽略的类别名称列表（多个类别用空格分隔）')
+    parser.add_argument('--force_regenerate_data_config', action='store_true', default=False,
+                        help='强制重新生成 data.yaml（即使文件已存在），确保类别ID与labels一致')
 
     args = parser.parse_args()
 
@@ -546,11 +606,27 @@ def main():
                 Path(args.output_dir) / 'data.yaml'
             )
 
-        # 如果data.yaml不存在，自动生成
-        if not Path(args.data_config).exists():
-            logger.info("数据集配置文件不存在，正在准备数据集...")
+        # 生成 data.yaml：文件不存在时自动生成，或 --force_regenerate_data_config 强制重新生成
+        should_generate = args.force_regenerate_data_config or not Path(args.data_config).exists()
+        if should_generate:
+            if args.force_regenerate_data_config:
+                logger.info("强制重新生成 data.yaml（--force_regenerate_data_config）...")
+            else:
+                logger.info("数据集配置文件不存在，正在准备数据集...")
             prepare_dataset(args.dataset_path, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
-            generate_data_yaml(args.dataset_path, args.data_config, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
+            _, old_id_to_new_id = generate_data_yaml(args.dataset_path, args.data_config, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
+
+            # 如果使用了 ignore_classes，需要重新映射标签文件中的类别ID
+            if args.ignore_classes and old_id_to_new_id:
+                dataset_path = Path(args.dataset_path)
+                for split in ['train', 'val', 'test']:
+                    label_dir = dataset_path / split / 'labels'
+                    remap_label_class_ids(label_dir, old_id_to_new_id)
+
+            # 清除 Ultralytics 缓存文件，防止过期缓存导致类别数量不匹配错误
+            for cache_file in Path(args.dataset_path).rglob('*.cache'):
+                cache_file.unlink(missing_ok=True)
+                logger.info(f"已删除过期缓存: {cache_file}")
 
         # 加载模型配置（如果有）
         model_config = None

@@ -252,7 +252,7 @@ def main():
                 else:
                     args.dataset_path = dataset_paths[0]
                 
-                formatter = YOLOFormatter(args.dataset_path, args.output_yolo_path)
+                formatter = YOLOFormatter(args.dataset_path, args.output_yolo_path, class_mapping_file=args.class_mapping_file)
                 
                 # yolo模式：转换为YOLO格式，划分数据集
                 formatter.format_dataset(

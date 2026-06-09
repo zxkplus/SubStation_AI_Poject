@@ -1,0 +1,16 @@
+触头、导电臂:ge_li_kai_guan
+伸缩节:shen_suo_jie
+继电器:ji_dian_qi
+散热器:san_re_qi
+表计:biao_ji
+绝缘子:jue_yuan_zi
+标识:she_bei_biao_shi
+机构箱:ji_gou_xiang
+接地引下线:jie_di_yin_xia_xian
+升高坐:sheng_gao_zuo
+油枕:you_zhen
+呼吸器:hu_xi_qi
+母线:mu_xian
+引线接头:yin_xian_jie_tou
+均压环:jun_ya_huan
+法兰:fa_lan
