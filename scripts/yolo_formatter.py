@@ -24,23 +24,25 @@ import yaml
 class YOLOFormatter:
     """YOLO格式转换器（支持多线程并行处理）"""
     
-    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None):
+    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None, class_mapping_file: str = None):
         """
         初始化转换器
-        
+
         Args:
             input_dataset_path: 输入数据集路径（原始数据）
             output_dataset_path: 输出数据集路径（YOLO格式）
             ignore_classes: 要忽略的类别名称列表
+            class_mapping_file: 类别映射文件路径，用于将中文类别名映射为英文类别名
         """
         self.input_path = Path(input_dataset_path)
         self.output_path = Path(output_dataset_path)
         self.supported_image_formats = {'.jpg', '.jpeg', '.png', '.bmp'}
         self.ignore_classes = set(ignore_classes) if ignore_classes else set()
-        
+        self.class_name_mapping = self._load_class_mapping(class_mapping_file) if class_mapping_file else {}
+
         # 线程锁
         self._lock = threading.Lock()
-        
+
         # 统计信息
         self.stats = {
             'total_images': 0,
@@ -49,12 +51,34 @@ class YOLOFormatter:
             'total_annotations': 0,
             'class_distribution': defaultdict(int)
         }
-        
-        # 类别映射
+
+        # 类别映射（名称到ID）
         self.class_mapping = {}  # {class_name: class_id}
         self.reverse_class_mapping = {}  # {class_id: class_name}
         self.next_class_id = 0
-    
+
+    def _load_class_mapping(self, mapping_file: str) -> Dict[str, str]:
+        """加载类别映射文件（格式: 中文名:英文名，每行一个映射）"""
+        mapping = {}
+        try:
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        if ':' in line:
+                            src_name, dst_name = line.split(':', 1)
+                            src_name = src_name.strip()
+                            dst_name = dst_name.strip()
+                            if src_name and dst_name:
+                                mapping[src_name] = dst_name
+        except Exception as e:
+            print(f"警告: 加载类别映射文件失败: {str(e)}")
+        return mapping
+
+    def _map_class_name(self, class_name: str) -> str:
+        """映射类别名，如果存在映射则返回映射后的名称，否则返回原名称"""
+        return self.class_name_mapping.get(class_name, class_name)
+
     def _update_stats(self, converted: int = 0, skipped: int = 0, annotations: int = 0,
                       class_dist: Dict[str, int] = None):
         """更新统计信息（线程安全）"""
@@ -67,15 +91,21 @@ class YOLOFormatter:
                     self.stats['class_distribution'][cls] += count
     
     def _get_class_id(self, class_name: str) -> Optional[int]:
-        """获取或分配类别ID，如果类别被忽略则返回None"""
+        """获取或分配类别ID，如果类别被忽略则返回None（线程安全）"""
         if class_name in self.ignore_classes:
             return None
-            
-        if class_name not in self.class_mapping:
-            self.class_mapping[class_name] = self.next_class_id
-            self.reverse_class_mapping[self.next_class_id] = class_name
-            self.next_class_id += 1
-        return self.class_mapping[class_name]
+
+        # 快速路径：如果已存在，直接返回（避免不必要的锁竞争）
+        if class_name in self.class_mapping:
+            return self.class_mapping[class_name]
+
+        with self._lock:
+            # 双重检查：锁内再次检查，防止其他线程已添加
+            if class_name not in self.class_mapping:
+                self.class_mapping[class_name] = self.next_class_id
+                self.reverse_class_mapping[self.next_class_id] = class_name
+                self.next_class_id += 1
+            return self.class_mapping[class_name]
     
     def load_dataset_structure(self) -> Dict[str, List[Tuple[str, str]]]:
         """
@@ -207,20 +237,23 @@ class YOLOFormatter:
         class_dist = defaultdict(int)
         
         for polygon, label in polygons_with_labels:
+            # 应用类别名映射（如中文→英文）
+            mapped_label = self._map_class_name(label)
+
             # 检查标签是否被忽略
-            if label in self.ignore_classes:
+            if mapped_label in self.ignore_classes:
                 continue
-                
-            class_id = self._get_class_id(label)
+
+            class_id = self._get_class_id(mapped_label)
             if class_id is None:  # 类别被忽略
                 continue
-                
+
             yolo_coords = self.polygon_to_yolo_format(polygon, img_width, img_height)
-            
+
             # 构造YOLO格式字符串
             yolo_line = f"{class_id} " + " ".join([f"{coord:.6f}" for coord in yolo_coords])
             yolo_annotations.append(yolo_line)
-            class_dist[label] += 1
+            class_dist[mapped_label] += 1
         
         # 如果所有标注都被过滤掉了，返回None
         if not yolo_annotations:
