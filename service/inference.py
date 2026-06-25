@@ -17,11 +17,13 @@ class YOLOMaskService:
         device: str = "cpu",
         conf_threshold: float = 0.25,
         img_size: int = 640,
+        retina_masks: bool = False,
     ):
         self.weights_path = Path(weights_path)
         self.device = device
         self.conf_threshold = conf_threshold
         self.img_size = img_size
+        self.retina_masks = retina_masks
         self.model = YOLO(str(self.weights_path))
 
     @staticmethod
@@ -107,6 +109,7 @@ class YOLOMaskService:
                 conf=self.conf_threshold,
                 device=self.device,
                 imgsz=self.img_size,
+                retina_masks=self.retina_masks,
                 verbose=False,
             )
 

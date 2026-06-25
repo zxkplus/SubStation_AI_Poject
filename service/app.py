@@ -16,14 +16,15 @@ logger = get_logger(name="service", log_dir="logs", prefix="service")
 _model_cache = {}
 
 
-def get_model(weights_path: str, device: str, conf_threshold: float, img_size: int) -> YOLOMaskService:
-    key = (weights_path, device, conf_threshold, img_size)
+def get_model(weights_path: str, device: str, conf_threshold: float, img_size: int, retina_masks: bool) -> YOLOMaskService:
+    key = (weights_path, device, conf_threshold, img_size, retina_masks)
     if key not in _model_cache:
         _model_cache[key] = YOLOMaskService(
             weights_path=weights_path,
             device=device,
             conf_threshold=conf_threshold,
             img_size=img_size,
+            retina_masks=retina_masks,
         )
     return _model_cache[key]
 
@@ -51,6 +52,7 @@ def infer(request: InferenceRequest):
             device=request.device,
             conf_threshold=request.conf_threshold,
             img_size=request.img_size,
+            retina_masks=request.retina_masks,
         )
 
         logger.debug("开始模型推理")

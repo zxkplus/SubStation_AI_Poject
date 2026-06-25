@@ -27,13 +27,14 @@ class InferenceClient:
         self.base_url = base_url
         self.infer_url = f"{base_url}/infer"
     
-    def predict(self, 
-                image_path: str, 
+    def predict(self,
+                image_path: str,
                 roi: dict,
                 weights_path: str = "yolov8n-seg.pt",
                 conf_threshold: float = 0.25,
                 img_size: int = 640,
-                device: str = "cpu") -> dict:
+                device: str = "cpu",
+                retina_masks: bool = False) -> dict:
         """
         调用推理接口
         
@@ -61,7 +62,8 @@ class InferenceClient:
             "weights_path": weights_path,
             "conf_threshold": conf_threshold,
             "img_size": img_size,
-            "device": device
+            "device": device,
+            "retina_masks": retina_masks,
         }
         
         # 发送请求
@@ -268,9 +270,14 @@ class SubstationClientApp:
         # 设备选择
         ttk.Label(param_frame, text="设备:").grid(row=1, column=2, sticky=tk.W, padx=5, pady=2)
         self.device_var = tk.StringVar(value="cpu")
-        device_combo = ttk.Combobox(param_frame, textvariable=self.device_var, 
+        device_combo = ttk.Combobox(param_frame, textvariable=self.device_var,
                                    values=["cpu", "cuda"], width=10, state="readonly")
         device_combo.grid(row=1, column=3, padx=5, pady=2)
+
+        # retina_masks 高分辨率掩码
+        self.retina_masks_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(param_frame, text="高分辨率掩码 (retina_masks)",
+                        variable=self.retina_masks_var).grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=2)
         
         # 图像显示区域
         image_frame = ttk.Frame(self.root)
@@ -413,7 +420,8 @@ class SubstationClientApp:
                 weights_path=self.weights_var.get(),
                 conf_threshold=self.conf_var.get(),
                 img_size=self.img_size_var.get(),
-                device=self.device_var.get()
+                device=self.device_var.get(),
+                retina_masks=self.retina_masks_var.get(),
             )
             
             # 绘制结果

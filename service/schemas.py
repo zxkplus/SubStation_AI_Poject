@@ -43,6 +43,7 @@ class InferenceRequest(BaseSchema):
     conf_threshold: float = 0.25
     img_size: int = 640
     device: str = "cpu"
+    retina_masks: bool = False
 
 
 class MaskContour(BaseModel):
