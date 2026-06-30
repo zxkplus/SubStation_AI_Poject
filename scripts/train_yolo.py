@@ -589,11 +589,18 @@ def main():
     parser.add_argument('--patience', type=int, default=50,
                         help='早停耐心值')
     parser.add_argument('--ignore_classes', type=str, nargs='*', default=[],
-                        help='要忽略的类别名称列表（多个类别用空格分隔）')
+                        help='要忽略的类别名称列表（多个类别用空格或逗号分隔）')
     parser.add_argument('--force_regenerate_data_config', action='store_true', default=False,
                         help='强制重新生成 data.yaml（即使文件已存在），确保类别ID与labels一致')
 
     args = parser.parse_args()
+
+    # 支持逗号分隔的类别名称（如 "cls1,cls2,cls3"），将其展开为独立元素
+    if args.ignore_classes:
+        expanded = []
+        for item in args.ignore_classes:
+            expanded.extend([c.strip() for c in item.split(',') if c.strip()])
+        args.ignore_classes = expanded
 
     try:
         # 检查YOLO版本
