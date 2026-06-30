@@ -754,6 +754,53 @@ def main():
         elif args.mode == 'val':
             if args.weights is None:
                 raise ValueError("验证模式需要指定--weights参数")
+
+            # 如果指定了 ignore_classes，需要过滤标注、重新生成 data.yaml 并重映射标签，
+            # 确保被忽略的类别不计入验证结果统计
+            if args.ignore_classes:
+                logger.info(f"验证模式：将忽略以下类别不计入统计: {args.ignore_classes}")
+
+                # 加载原始类别映射（class_name → class_id）
+                dataset_path = Path(args.dataset_path)
+                classes_file = dataset_path / 'classes.txt'
+                class_mapping = {}
+                if classes_file.exists():
+                    with open(classes_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                parts = line.split(' ', 1)
+                                if len(parts) == 2:
+                                    class_name = parts[1]
+                                    class_id = int(parts[0])
+                                    class_mapping[class_name] = class_id
+
+                # 过滤所有 split 中标注文件的忽略类别
+                if class_mapping:
+                    for split in ['train', 'val', 'test']:
+                        label_dir = dataset_path / split / 'labels'
+                        if label_dir.exists():
+                            for label_file in label_dir.glob('*.txt'):
+                                filter_label_file(label_file, class_mapping, args.ignore_classes)
+
+                # 重新生成 data.yaml（排除忽略类别）
+                _, old_id_to_new_id = generate_data_yaml(
+                    args.dataset_path, args.data_config,
+                    args.train_ratio, 1 - args.train_ratio,
+                    args.ignore_classes
+                )
+
+                # 重映射剩余类别的ID为连续索引
+                if old_id_to_new_id:
+                    for split in ['train', 'val', 'test']:
+                        label_dir = dataset_path / split / 'labels'
+                        remap_label_class_ids(label_dir, old_id_to_new_id)
+
+                # 清除 Ultralytics 缓存文件，防止过期缓存导致类别数量不匹配错误
+                for cache_file in dataset_path.rglob('*.cache'):
+                    cache_file.unlink(missing_ok=True)
+                    logger.info(f"已删除过期缓存: {cache_file}")
+
             trainer.validate(
                 weights_path=args.weights,
                 batch_size=args.batch_size,
