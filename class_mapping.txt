@@ -4,7 +4,9 @@
 散热器:san_re_qi
 表计:biao_ji
 绝缘子:jue_yuan_zi
+盆式绝缘子:jue_yuan_zi
 标识:she_bei_biao_shi
+设备标识:she_bei_biao_shi
 机构箱:ji_gou_xiang
 接地引下线:jie_di_yin_xia_xian
 升高坐:sheng_gao_zuo
@@ -14,3 +16,8 @@
 引线接头:yin_xian_jie_tou
 均压环:jun_ya_huan
 法兰:fa_lan
+膨胀器:peng_zhang_qi
+油位:you_wei
+末屏:mo_ping
+电容器:dian_rang_qi
+指示:zhi_shi
