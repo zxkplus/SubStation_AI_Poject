@@ -801,6 +801,21 @@ def main():
                         seg_ap50 = results.seg.ap50[valid_keep]
                         seg_ap = results.seg.ap[valid_keep]
                         logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f} (基于 {len(valid_keep)}/{len(keep_indices)} 个类别)")
+
+                    # 打印过滤后的 per-class 明细
+                    logger.info("过滤后各类别指标（排除 ignore_classes 后保留的类别）:")
+                    logger.info(f"{'类别':<22} {'Box mAP50':<10} {'Box mAP50-95':<13} {'Mask mAP50':<10} {'Mask mAP50-95':<13}")
+                    logger.info("-" * 68)
+                    for i, idx in enumerate(valid_keep):
+                        name = all_names[idx]
+                        box_50 = results.box.ap50[idx]
+                        box_95 = results.box.ap[idx]
+                        if hasattr(results, 'seg') and results.seg is not None and len(results.seg.ap50) > 0:
+                            mask_50 = results.seg.ap50[idx]
+                            mask_95 = results.seg.ap[idx]
+                            logger.info(f"{name:<22} {box_50:<10.4f} {box_95:<13.4f} {mask_50:<10.4f} {mask_95:<13.4f}")
+                        else:
+                            logger.info(f"{name:<22} {box_50:<10.4f} {box_95:<13.4f}")
         elif args.mode == "test":
             if args.weights is None:
                 raise ValueError("测试模式需要指定--weights参数")
@@ -847,6 +862,21 @@ def main():
                         seg_ap50 = results.seg.ap50[valid_keep]
                         seg_ap = results.seg.ap[valid_keep]
                         logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f} (基于 {len(valid_keep)}/{len(keep_indices)} 个类别)")
+
+                    # 打印过滤后的 per-class 明细
+                    logger.info("过滤后各类别指标（排除 ignore_classes 后保留的类别）:")
+                    logger.info(f"{'类别':<22} {'Box mAP50':<10} {'Box mAP50-95':<13} {'Mask mAP50':<10} {'Mask mAP50-95':<13}")
+                    logger.info("-" * 68)
+                    for i, idx in enumerate(valid_keep):
+                        name = all_names[idx]
+                        box_50 = results.box.ap50[idx]
+                        box_95 = results.box.ap[idx]
+                        if hasattr(results, 'seg') and results.seg is not None and len(results.seg.ap50) > 0:
+                            mask_50 = results.seg.ap50[idx]
+                            mask_95 = results.seg.ap[idx]
+                            logger.info(f"{name:<22} {box_50:<10.4f} {box_95:<13.4f} {mask_50:<10.4f} {mask_95:<13.4f}")
+                        else:
+                            logger.info(f"{name:<22} {box_50:<10.4f} {box_95:<13.4f}")
         elif args.mode == "export":
             if args.weights is None:
                 raise ValueError("导出模式需要指定--weights参数")
