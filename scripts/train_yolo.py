@@ -762,112 +762,79 @@ def main():
             if args.weights is None:
                 raise ValueError("验证模式需要指定--weights参数")
 
-            # 如果指定了 ignore_classes，需要过滤标注、重新生成 data.yaml 并重映射标签，
-            # 确保被忽略的类别不计入验证结果统计
-            if args.ignore_classes:
-                logger.info(f"验证模式：将忽略以下类别不计入统计: {args.ignore_classes}")
-
-                # 加载原始类别映射（class_name → class_id）
-                dataset_path = Path(args.dataset_path)
-                classes_file = dataset_path / 'classes.txt'
-                class_mapping = {}
-                if classes_file.exists():
-                    with open(classes_file, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                parts = line.split(' ', 1)
-                                if len(parts) == 2:
-                                    class_name = parts[1]
-                                    class_id = int(parts[0])
-                                    class_mapping[class_name] = class_id
-
-                # 过滤所有 split 中标注文件的忽略类别
-                if class_mapping:
-                    for split in ['train', 'val', 'test']:
-                        label_dir = dataset_path / split / 'labels'
-                        if label_dir.exists():
-                            for label_file in label_dir.glob('*.txt'):
-                                filter_label_file(label_file, class_mapping, args.ignore_classes)
-
-                # 重新生成 data.yaml（排除忽略类别）
-                _, old_id_to_new_id = generate_data_yaml(
-                    args.dataset_path, args.data_config,
-                    args.train_ratio, 1 - args.train_ratio,
-                    args.ignore_classes
-                )
-
-                # 重映射剩余类别的ID为连续索引
-                if old_id_to_new_id:
-                    for split in ['train', 'val', 'test']:
-                        label_dir = dataset_path / split / 'labels'
-                        remap_label_class_ids(label_dir, old_id_to_new_id)
-
-                # 清除 Ultralytics 缓存文件，防止过期缓存导致类别数量不匹配错误
-                for cache_file in dataset_path.rglob('*.cache'):
-                    cache_file.unlink(missing_ok=True)
-                    logger.info(f"已删除过期缓存: {cache_file}")
-
-            trainer.validate(
+            results = trainer.validate(
                 weights_path=args.weights,
                 batch_size=args.batch_size,
                 img_size=args.img_size
             )
+
+            # 如果指定了 ignore_classes，从 per-class 结果中排除被忽略的类别，
+            # 重新计算聚合 mAP（不修改标签和 data.yaml，避免模型预测ID与标签ID错位）
+            if args.ignore_classes and results is not None:
+                import numpy as np
+
+                ignore_set = set(args.ignore_classes)
+                all_names = results.names  # {class_id: class_name}
+                keep_indices = [
+                    idx for idx, name in all_names.items()
+                    if name not in ignore_set
+                ]
+                ignored_names = [
+                    name for idx, name in all_names.items()
+                    if name in ignore_set
+                ]
+
+                if keep_indices and len(keep_indices) < len(all_names):
+                    logger.info(f"排除以下类别后重新统计: {ignored_names}")
+
+                    box_ap50 = results.box.ap50[keep_indices]
+                    box_ap = results.box.ap[keep_indices]
+                    logger.info(f"[过滤后] Box  mAP50: {np.mean(box_ap50):.4f}, mAP50-95: {np.mean(box_ap):.4f}")
+
+                    if hasattr(results, 'seg') and results.seg is not None:
+                        seg_ap50 = results.seg.ap50[keep_indices]
+                        seg_ap = results.seg.ap[keep_indices]
+                        logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f}")
         elif args.mode == "test":
             if args.weights is None:
                 raise ValueError("测试模式需要指定--weights参数")
 
-            # 如果指定了 ignore_classes，需要过滤标注、重新生成 data.yaml 并重映射标签，
-            # 确保被忽略的类别不计入测试结果统计
-            if args.ignore_classes:
-                logger.info(f"测试模式：将忽略以下类别不计入统计: {args.ignore_classes}")
-
-                # 加载原始类别映射（class_name → class_id）
-                dataset_path = Path(args.dataset_path)
-                classes_file = dataset_path / "classes.txt"
-                class_mapping = {}
-                if classes_file.exists():
-                    with open(classes_file, "r", encoding="utf-8") as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                parts = line.split(" ", 1)
-                                if len(parts) == 2:
-                                    class_name = parts[1]
-                                    class_id = int(parts[0])
-                                    class_mapping[class_name] = class_id
-
-                # 过滤所有 split 中标注文件的忽略类别
-                if class_mapping:
-                    for split in ["train", "val", "test"]:
-                        label_dir = dataset_path / split / "labels"
-                        if label_dir.exists():
-                            for label_file in label_dir.glob("*.txt"):
-                                filter_label_file(label_file, class_mapping, args.ignore_classes)
-
-                # 重新生成 data.yaml（排除忽略类别）
-                _, old_id_to_new_id = generate_data_yaml(
-                    args.dataset_path, args.data_config,
-                    args.train_ratio, 1 - args.train_ratio,
-                    args.ignore_classes
-                )
-
-                # 重映射剩余类别的ID为连续索引
-                if old_id_to_new_id:
-                    for split in ["train", "val", "test"]:
-                        label_dir = dataset_path / split / "labels"
-                        remap_label_class_ids(label_dir, old_id_to_new_id)
-
-                # 清除 Ultralytics 缓存文件，防止过期缓存导致类别数量不匹配错误
-                for cache_file in dataset_path.rglob("*.cache"):
-                    cache_file.unlink(missing_ok=True)
-                    logger.info(f"已删除过期缓存: {cache_file}")
-
-            trainer.test(
+            results = trainer.test(
                 weights_path=args.weights,
                 batch_size=args.batch_size,
                 img_size=args.img_size
             )
+
+            # 如果指定了 ignore_classes，从 per-class 结果中排除被忽略的类别，
+            # 重新计算聚合 mAP（不修改标签和 data.yaml，避免模型预测ID与标签ID错位）
+            if args.ignore_classes and results is not None:
+                import numpy as np
+
+                ignore_set = set(args.ignore_classes)
+                all_names = results.names  # {class_id: class_name}
+                # 找出需要保留的类别索引
+                keep_indices = [
+                    idx for idx, name in all_names.items()
+                    if name not in ignore_set
+                ]
+                ignored_names = [
+                    name for idx, name in all_names.items()
+                    if name in ignore_set
+                ]
+
+                if keep_indices and len(keep_indices) < len(all_names):
+                    logger.info(f"排除以下类别后重新统计: {ignored_names}")
+
+                    # Box metrics
+                    box_ap50 = results.box.ap50[keep_indices]
+                    box_ap = results.box.ap[keep_indices]
+                    logger.info(f"[过滤后] Box  mAP50: {np.mean(box_ap50):.4f}, mAP50-95: {np.mean(box_ap):.4f}")
+
+                    # Mask metrics (如果存在)
+                    if hasattr(results, 'seg') and results.seg is not None:
+                        seg_ap50 = results.seg.ap50[keep_indices]
+                        seg_ap = results.seg.ap[keep_indices]
+                        logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f}")
         elif args.mode == "export":
             if args.weights is None:
                 raise ValueError("导出模式需要指定--weights参数")
