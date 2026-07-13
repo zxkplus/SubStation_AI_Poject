@@ -787,14 +787,20 @@ def main():
                 if keep_indices and len(keep_indices) < len(all_names):
                     logger.info(f"排除以下类别后重新统计: {ignored_names}")
 
-                    box_ap50 = results.box.ap50[keep_indices]
-                    box_ap = results.box.ap[keep_indices]
-                    logger.info(f"[过滤后] Box  mAP50: {np.mean(box_ap50):.4f}, mAP50-95: {np.mean(box_ap):.4f}")
+                    # 只保留在 results.box.ap50 有效范围内的索引，防止 IndexError
+                    num_classes = len(results.box.ap50)
+                    valid_keep = [i for i in keep_indices if i < num_classes]
+                    if len(valid_keep) < len(keep_indices):
+                        logger.warning(f"移除了 {len(keep_indices) - len(valid_keep)} 个超出模型输出范围的类别索引")
 
-                    if hasattr(results, 'seg') and results.seg is not None:
-                        seg_ap50 = results.seg.ap50[keep_indices]
-                        seg_ap = results.seg.ap[keep_indices]
-                        logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f}")
+                    box_ap50 = results.box.ap50[valid_keep]
+                    box_ap = results.box.ap[valid_keep]
+                    logger.info(f"[过滤后] Box  mAP50: {np.mean(box_ap50):.4f}, mAP50-95: {np.mean(box_ap):.4f} (基于 {len(valid_keep)}/{len(keep_indices)} 个类别)")
+
+                    if hasattr(results, 'seg') and results.seg is not None and len(results.seg.ap50) > 0:
+                        seg_ap50 = results.seg.ap50[valid_keep]
+                        seg_ap = results.seg.ap[valid_keep]
+                        logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f} (基于 {len(valid_keep)}/{len(keep_indices)} 个类别)")
         elif args.mode == "test":
             if args.weights is None:
                 raise ValueError("测试模式需要指定--weights参数")
@@ -825,16 +831,22 @@ def main():
                 if keep_indices and len(keep_indices) < len(all_names):
                     logger.info(f"排除以下类别后重新统计: {ignored_names}")
 
+                    # 只保留在 results.box.ap50 有效范围内的索引，防止 IndexError
+                    num_classes = len(results.box.ap50)
+                    valid_keep = [i for i in keep_indices if i < num_classes]
+                    if len(valid_keep) < len(keep_indices):
+                        logger.warning(f"移除了 {len(keep_indices) - len(valid_keep)} 个超出模型输出范围的类别索引")
+
                     # Box metrics
-                    box_ap50 = results.box.ap50[keep_indices]
-                    box_ap = results.box.ap[keep_indices]
-                    logger.info(f"[过滤后] Box  mAP50: {np.mean(box_ap50):.4f}, mAP50-95: {np.mean(box_ap):.4f}")
+                    box_ap50 = results.box.ap50[valid_keep]
+                    box_ap = results.box.ap[valid_keep]
+                    logger.info(f"[过滤后] Box  mAP50: {np.mean(box_ap50):.4f}, mAP50-95: {np.mean(box_ap):.4f} (基于 {len(valid_keep)}/{len(keep_indices)} 个类别)")
 
                     # Mask metrics (如果存在)
-                    if hasattr(results, 'seg') and results.seg is not None:
-                        seg_ap50 = results.seg.ap50[keep_indices]
-                        seg_ap = results.seg.ap[keep_indices]
-                        logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f}")
+                    if hasattr(results, 'seg') and results.seg is not None and len(results.seg.ap50) > 0:
+                        seg_ap50 = results.seg.ap50[valid_keep]
+                        seg_ap = results.seg.ap[valid_keep]
+                        logger.info(f"[过滤后] Mask mAP50: {np.mean(seg_ap50):.4f}, mAP50-95: {np.mean(seg_ap):.4f} (基于 {len(valid_keep)}/{len(keep_indices)} 个类别)")
         elif args.mode == "export":
             if args.weights is None:
                 raise ValueError("导出模式需要指定--weights参数")
