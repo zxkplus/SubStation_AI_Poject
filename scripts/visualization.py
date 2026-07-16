@@ -10,42 +10,7 @@ import numpy as np
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-import matplotlib
-matplotlib.use('Agg')  # 使用非交互式后端
-import matplotlib.pyplot as plt
 
-# 配置matplotlib中文字体支持
-def setup_chinese_font():
-    """设置matplotlib中文字体支持"""
-    try:
-        # 尝试使用系统中常见的中文字体
-        chinese_fonts = [
-            'SimHei',      # 黑体
-            'Microsoft YaHei',  # 微软雅黑
-            'WenQuanYi Micro Hei',  # 文泉驿微米黑
-            'DejaVu Sans',  # 默认字体（作为备选）
-        ]
-        
-        # 检查可用字体
-        available_fonts = set([f.name for f in matplotlib.font_manager.fontManager.ttflist])
-        
-        for font in chinese_fonts:
-            if font in available_fonts:
-                matplotlib.rcParams['font.sans-serif'] = [font]
-                matplotlib.rcParams['axes.unicode_minus'] = False  # 正常显示负号
-                break
-        else:
-            # 如果没有找到中文字体，使用默认字体但忽略中文警告
-            matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
-            matplotlib.rcParams['axes.unicode_minus'] = False
-            
-    except Exception as e:
-        # 如果字体配置失败，使用默认配置
-        matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans']
-        matplotlib.rcParams['axes.unicode_minus'] = False
-
-# 执行字体配置
-setup_chinese_font()
 
 
 class MaskVisualizer:
@@ -231,14 +196,22 @@ class MaskVisualizer:
                 color_mask[mask > 0] = color
         
         # 叠加mask到原图
-        result = cv2.addWeighted(img, 1 - self.alpha, color_mask, self.alpha, 0)
+        # 创建结果图片（先复制原图）
+        result = img.copy()
         
-        # 绘制轮廓和标签
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        font_thickness = 2
+        # 创建mask叠加区域（只在mask区域叠加颜色）
+        mask_region = np.any(color_mask > 0, axis=2)  # 找到有颜色的区域
         
-        for i, (mask, label) in enumerate(zip(masks, labels)):
+        # 在mask区域叠加颜色，非mask区域保持原图
+        for c in range(3):  # BGR三个通道
+            result[:, :, c] = np.where(
+                mask_region,
+                img[:, :, c] * (1 - self.alpha) + color_mask[:, :, c] * self.alpha,
+                img[:, :, c]  # 非mask区域保持原图
+            )
+        
+        # 绘制轮廓
+        for i, mask in enumerate(masks):
             # 调整mask尺寸
             if mask.shape[:2] != img.shape[:2]:
                 mask = cv2.resize(mask, (img_width, img_height), interpolation=cv2.INTER_NEAREST)
@@ -246,31 +219,6 @@ class MaskVisualizer:
             # 绘制轮廓
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(result, contours, -1, (255, 255, 255), 2)
-            
-            # 绘制标签
-            if contours:
-                # 找到轮廓的中心点
-                cnt = contours[0]
-                M = cv2.moments(cnt)
-                if M['m00'] != 0:
-                    cx = int(M['m10'] / M['m00'])
-                    cy = int(M['m01'] / M['m00'])
-                    
-                    # 计算文本大小
-                    (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, font_thickness)
-                    
-                    # 绘制文本背景（半透明黑色）
-                    text_bg = np.zeros_like(result)
-                    cv2.rectangle(text_bg, 
-                                (cx - text_w//2 - 5, cy - text_h//2 - 5),
-                                (cx + text_w//2 + 5, cy + text_h//2 + 5),
-                                (0, 0, 0), -1)
-                    result = cv2.addWeighted(result, 0.7, text_bg, 0.3, 0)
-                    
-                    # 绘制文本
-                    cv2.putText(result, label, 
-                              (cx - text_w//2, cy + text_h//2),
-                              font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
         
         return result
     
@@ -309,14 +257,8 @@ class MaskVisualizer:
                     output_filename = f"{sample_idx+1:03d}_{category}_{img_name}_visualized.png"
                     output_path = os.path.join(output_dir, output_filename)
                     
-                    # 保存图片
-                    plt.figure(figsize=(12, 8))
-                    plt.imshow(result_rgb)
-                    plt.title(f"{category} - {img_name}", fontsize=12)
-                    plt.axis('off')
-                    plt.tight_layout()
-                    plt.savefig(output_path, dpi=150, bbox_inches='tight')
-                    plt.close()
+                    # 保存图片（直接用cv2保存，避免额外文字）
+                    cv2.imwrite(output_path, result_img)
                     
                     sample_idx += 1
                     print(f"  ✓ 已保存: {output_filename}")
@@ -328,4 +270,4 @@ class MaskVisualizer:
         print(f"\n可视化完成!")
         print(f"总共处理了 {sample_idx} 个样本")
         print(f"所有图片已保存到: {output_dir}")
-        print("\n提示: 在支持GUI的环境中，可以使用matplotlib的交互式查看器查看这些图片")
+
