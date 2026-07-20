@@ -58,3 +58,6 @@ statistic/check_servers.py
 *.pptx
 *.xlsx
 *.csv
+
+visualization_output/*
+.server_config.yaml

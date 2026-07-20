@@ -1,6 +1,6 @@
 ---
 name: substation-segmentation-dataset
-description: 变电站设备分割数据集管理与训练；支持YOLOv6/YOLOv8/YOLO26实例分割模型训练
+description: 变电站设备分割数据集管理与训练；本地数据处理 + 服务器训练全流水线
 dependency:
   python:
     - opencv-python>=4.5.0
@@ -8,353 +8,403 @@ dependency:
     - matplotlib>=3.3.0
     - pillow>=8.0.0
     - pyyaml>=5.4.0
+    - paramiko>=2.7.0
 ---
 
-# 变电站设备分割数据集管理 Skill
+# 变电站设备分割数据集管理与训练 Skill
 
-## 任务目标
-- 本 Skill 用于：变电站设备分割数据集的统计分析与YOLO格式转换
-- 能力包含：数据集加载、类别统计、Mask可视化、YOLO格式转换
-- 触发条件：用户需要了解数据集分布、查看标注质量、准备训练数据时
+## 概述
 
-## 前置准备
+本 Skill 覆盖变电站设备分割的完整流水线：
 
-### 依赖安装
+```
+原始数据(raw_data) → 解压整理(extract_and_copy.sh) → 数据裁剪转换(main.py convert)
+→ YOLO格式转换(main.py yolo) → 上传服务器(server_helper.py upload)
+→ 检查GPU → 启动训练(nohup) → 监控训练 → 模型评估 → 下载模型
+```
+
+**本地操作**在 `/home/industai/workspace/SubStation_AI_Poject` 执行。
+**服务器操作**通过 `scripts/server_helper.py` 远程执行，目标服务器 172.20.60.10。
+
+---
+
+## 前置条件
+
+### 本地环境
+
 ```bash
-pip install opencv-python numpy matplotlib pillow pyyaml
+# 核心依赖
+pip install opencv-python numpy matplotlib pillow pyyaml paramiko
 
-# 如果需要训练YOLOv6
-pip install git+https://github.com/meituan/YOLOv6.git@main
-
-# 如果需要训练YOLO26（Ultralytics）
+# YOLO26（本地测试用）
 pip install ultralytics>=8.4.0
 ```
 
-### 数据集目录结构要求
+### 服务器配置
+
+服务器连接信息存储在 `.server_config.yaml`（已加入 `.gitignore`，不提交 Git）：
+
+```yaml
+# .server_config.yaml 结构
+servers:
+  "172.20.60.10":
+    host: "172.20.60.10"
+    user: "industai"
+    password: "xxx"
+    port: 22
+    project_path: "/home/industai/zxk/SubStation_AI_Poject"
+    conda_env: "ultralytics-8.4.84"
+    data_path: "/data/zxk/dataset"
+
+local:
+  project_path: "/home/industai/workspace/SubStation_AI_Poject"
+  raw_data_path: "/media/industai/data11/SEG_DATA/raw_data"
+  roi_data_path: "/media/industai/data11/SEG_DATA/roi自动分割"
+  converted_data_path: "/media/industai/data11/SEG_DATA/converted_dataset"
+  yolo_data_path: "/media/industai/data11/SEG_DATA/yolo_data"
+
+training_defaults:
+  yolo_version: "yolo26"
+  model_size: "l"
+  model_config: "train_configs/yolov26_l_seg_config.yaml"
+  weights: "weights/yolo26l-seg.pt"
+  epochs: 60
+  batch_size: 3
+  img_size: 1024
+  ignore_classes: [...]
 ```
-dataset_root/
-├── category_1/
-│   ├── image_1.jpg
-│   ├── image_1.json
-│   ├── image_2.jpg
-│   └── image_2.json
-├── category_2/
-│   └── ...
-└── category_n/
-    └── ...
-```
 
-**数据格式规范**：
-- 第一层目录：分割类别（如 `transformer`、`insulator`）
-- 第二层目录：图片文件（支持 jpg/png/bmp）和对应的JSON标注文件
-- JSON与图片名称一致（仅扩展名不同）
+### 代码同步
 
-## 前置准备
-
-### 环境安装
-
-**方法1: 自动安装脚本（推荐）**
+服务器代码通过 Git 同步（**不是 rsync**）。本地修改代码后：
 ```bash
-cd /workspace/projects/substation-segmentation-dataset
-./scripts/install_conda_env.sh
+git add -A && git commit -m "描述"
+git push origin main
 ```
-
-**方法2: 快速安装**
+然后在服务器上拉取：
 ```bash
-cd /workspace/projects/substation-segmentation-dataset
-./scripts/install_conda_env_quick.sh
+python3 scripts/server_helper.py -s 172.20.60.10 exec "cd /home/industai/zxk/SubStation_AI_Poject && git pull"
 ```
 
-**方法3: 使用requirements.txt**
-```bash
-# 创建conda环境
-conda create -n substation_seg python=3.10 -y
-conda activate substation_seg
+---
 
-# 安装PyTorch（根据GPU情况选择）
-# 有GPU:
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-# 仅CPU:
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+## 流水线：第一阶段 — 本地数据处理
 
-# 安装其他依赖
-pip install -r requirements.txt
-```
+### 步骤 1：解压原始数据
 
-详细安装说明请参考 [references/install_guide.md](references/install_guide.md)
-
-### 依赖安装
-```bash
-# 核心依赖（已在安装脚本中包含）
-pip install opencv-python numpy matplotlib pillow pyyaml
-
-# YOLO26（Ultralytics）
-pip install ultralytics>=8.4.0
-
-# YOLOv6（可选）
-pip install git+https://github.com/meituan/YOLOv6.git@main
-```
-
-### 数据集目录结构要求
-
-### 标准流程
-
-1. **统计数据集分布**
-   ```bash
-   python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-     --dataset_path /path/to/dataset \
-     --mode stats
-   ```
-   - 智能体会调用 `scripts/statistics.py` 计算各类别样本数量
-   - 生成统计报告并在终端输出
-
-2. **可视化标注示例**
-   ```bash
-   python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-     --dataset_path /path/to/dataset \
-     --mode visualize \
-     --samples_per_class 3
-   ```
-   - 智能体会调用 `scripts/visualization.py` 加载标注
-   - 在每个类别中随机选择指定数量的样本
-   - 将mask叠加到原图并通过弹窗展示
-
-3. **完整分析（统计+可视化）**
-   ```bash
-   python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-     --dataset_path /path/to/dataset \
-     --mode full \
-     --samples_per_class 2
-   ```
-
-### 可选分支
-
-- **当仅查看统计结果**：使用 `--mode stats` 跳过可视化
-- **当需要自定义采样数量**：调整 `--samples_per_class` 参数
-- **当数据集较大**：建议先运行 `stats` 模式快速预览，再进行可视化
-- **当训练后检查mask效果**：使用mask可视化脚本（详见下方）
-- **当需要YOLO格式训练数据**：使用 `--mode yolo` 进行转换（详见下方）
-
-### YOLO格式转换
-
-将分割标注数据转换为YOLO目标检测格式：
+当用户说"有新数据来了，在 xxx 目录"时，第一步是运行 `extract_and_copy.sh` 提取图片和 JSON 标注。
 
 ```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-  --dataset_path /path/to/dataset \
-  --mode yolo \
-  --output_yolo_path /path/to/yolo_output \
+cd /home/industai/workspace/SubStation_AI_Poject
+./scripts/extract_and_copy.sh \
+  /media/industai/data11/SEG_DATA/raw_data/<批次目录> \
+  /media/industai/data11/SEG_DATA/roi自动分割
+```
+
+**输入**：`raw_data/<batch>/<category>/<N>/` 下的 `jpg` 文件夹（图片）和 `json.zip`（标注）
+**输出**：`roi自动分割/` 下混合存放所有 `*.jpg` 和 `*.json` 文件
+
+**注意**：
+- 如果 `roi自动分割/` 已有数据，新数据会追加进去（不覆盖同名文件）
+- 先确认目标目录有写入权限（`roi自动分割/` 有时为只读挂载）
+
+### 步骤 2：数据裁剪与格式转换
+
+将图片+JSON标注裁剪为单目标小图，统一到 `converted_dataset/` 目录。
+
+```bash
+cd /home/industai/workspace/SubStation_AI_Poject
+python3 ./scripts/main.py \
+  --dataset_path /media/industai/data11/SEG_DATA/roi自动分割 \
+  --class_mapping_file class_mapping.txt \
+  --mode "convert" \
+  --samples_per_class 10000 \
+  --output_report /media/industai/data11/SEG_DATA/converted_dataset \
   --expand_ratio 0.0 \
-  --min_size 32
+  --min_size 200 \
+  --enable_rectangle \
+  --ignore_classes bei_jin,bei_jing
 ```
 
-**转换流程**：
-1. 根据每个mask的外接矩形裁剪原图
-2. 将标注数据坐标系转换为裁剪后小图的坐标
-3. 生成符合YOLO Polygon规范的标注文件（每行：`class_id x1 y1 x2 y2 x3 y3 ...`）
-4. 自动生成类别映射文件 `classes.txt`
-5. 统计各类别图像尺寸分布（最小、最大、平均值）
-
-**可选参数**：
-| 参数 | 说明 | 默认值 |
+**关键参数说明**：
+| 参数 | 含义 | 建议值 |
 |------|------|--------|
-| `--output_yolo_path` | YOLO输出目录 | 输入目录的 `yolo_output` |
-| `--samples_per_class` | 每类采样数量 | 全部转换 |
-| `--expand_ratio` | 边界框扩展比例 | 0.0 |
-| `--min_size` | 最小裁剪尺寸(像素) | 32 |
-| `--num_workers` | 并行线程数 | 8 |
+| `--samples_per_class` | 每类最多裁剪图片数 | 10000（全量） |
+| `--expand_ratio` | 裁剪框扩展比例 | 0.0～0.1 |
+| `--min_size` | 最小目标尺寸(px) | 200 |
+| `--enable_rectangle` | 矩形优先策略 | 已启用 |
+| `--ignore_classes` | 跳过的类别（逗号分隔） | bei_jin,bei_jing 等 |
 
-## 资源索引
+### 步骤 3：YOLO 格式转换
 
-- **核心脚本**：
-  - [scripts/data_loader.py](scripts/data_loader.py) - 数据加载器，遍历目录结构并加载图片与标注
-  - [scripts/statistics.py](scripts/statistics.py) - 统计模块，计算类别分布和数据集信息
-  - [scripts/visualization.py](scripts/visualization.py) - 可视化模块，处理mask叠加和图片输出
-  - [scripts/yolo_converter.py](scripts/yolo_converter.py) - YOLO格式转换器，支持多线程并行转换，保留polygon轮廓信息，统计图像尺寸分布
-  - [scripts/yolo_validator.py](scripts/yolo_validator.py) - YOLO数据集验证器，绘制mask验证转换逻辑
-  - [scripts/train_yolo.py](scripts/train_yolo.py) - YOLO训练统一入口，支持YOLOv6/YOLOv8/YOLO26版本
-  - [scripts/validate_with_mask.py](scripts/validate_with_mask.py) - Mask可视化验证脚本，专门用于检查mask预测效果
-  - [scripts/diagnose_mask.py](scripts/diagnose_mask.py) - 模型诊断脚本，排查mask输出问题
-  - [scripts/test_mask_vis.py](scripts/test_mask_vis.py) - 简化版mask可视化测试脚本
-  - [scripts/trainers/base_trainer.py](scripts/trainers/base_trainer.py) - 基础训练器接口
-  - [scripts/trainers/yolov6_trainer.py](scripts/trainers/yolov6_trainer.py) - YOLOv6实例分割训练器实现
-  - [scripts/trainers/yolov8_trainer.py](scripts/trainers/yolov8_trainer.py) - Ultralytics YOLOv8实例分割训练器实现
-  - [scripts/trainers/yolov26_trainer.py](scripts/trainers/yolov26_trainer.py) - Ultralytics YOLO26实例分割训练器实现
-  - [scripts/main.py](scripts/main.py) - 主入口，整合所有功能并提供命令行接口
+将裁剪后的数据转为 YOLO 分割格式（train/val 划分 + polygon 标注）。
 
-- **参考文档**：
-  - [references/data_format.md](references/data_format.md) - JSON标注格式规范与YOLO格式说明
-  - [references/training_guide.md](references/training_guide.md) - YOLO训练完整指南
-  - [references/install_guide.md](references/install_guide.md) - Conda环境安装指南
-  - [references/mask_visualization_guide.md](references/mask_visualization_guide.md) - Mask可视化问题排查指南
-
-- **训练配置**：
-  - [train_configs/data_template.yaml](train_configs/data_template.yaml) - 数据集配置模板
-  - [train_configs/yolov6_seg_config.yaml](train_configs/yolov6_seg_config.yaml) - YOLOv6实例分割配置
-  - [train_configs/yolov8_seg_config.yaml](train_configs/yolov8_seg_config.yaml) - YOLOv8实例分割配置
-  - [train_configs/yolov26_seg_config.yaml](train_configs/yolov26_seg_config.yaml) - YOLO26实例分割配置
-
-## 模块扩展指南
-
-### 扩展新功能
-
-1. **添加新的统计维度**：
-   - 在 `scripts/statistics.py` 的 `DatasetStats` 类中添加新方法
-   - 例如：图片尺寸分布、mask面积统计、标注完整性检查
-
-2. **支持新的标注格式**：
-   - 在 `scripts/data_loader.py` 中扩展JSON解析逻辑
-   - 参考 [references/data_format.md](references/data_format.md) 中的格式定义
-
-3. **添加新的可视化方式**：
-   - 在 `scripts/visualization.py` 中扩展 `MaskVisualizer` 类
-   - 例如：添加轮廓绘制、热力图、对比视图
-
-### 模块化设计原则
-
-- **数据加载器**（data_loader.py）：只负责文件IO和数据结构化，不处理统计或可视化
-- **统计模块**（statistics.py）：只处理数值计算和报告生成，不涉及图像操作
-- **可视化模块**（visualization.py）：只处理图像渲染和输出，不依赖统计逻辑
-- **YOLO转换器**（yolo_converter.py）：独立的数据格式转换模块，不依赖其他模块
-- **主入口**（main.py）：协调各模块，处理命令行参数，组织执行流程
-
-## 注意事项
-
-- 确保数据集目录结构符合要求，否则会触发错误提示
-- JSON文件必须与对应的图片文件同名（仅扩展名不同）
-- 可视化输出需要GUI环境，在服务器环境中会保存为图片文件
-- 对于大型数据集，建议先运行统计模式了解数据分布
-- YOLO转换会跳过小于 `min_size` 的目标，可根据实际需求调整
-- `expand_ratio` 用于增加裁剪区域，避免目标被裁剪边缘截断
-
-## 使用示例
-
-### 示例1：快速统计数据集
 ```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-  --dataset_path ./datasets/substation \
+cd /home/industai/workspace/SubStation_AI_Poject
+python3 ./scripts/main.py \
+  --dataset_path /media/industai/data11/SEG_DATA/converted_dataset \
+  --mode "yolo" \
+  --output_yolo_path /media/industai/data11/SEG_DATA/yolo_data
+```
+
+**输出**：`yolo_data/` 下生成 `train/`、`val/`、`classes.txt`、`data.yaml`
+
+---
+
+## 流水线：第二阶段 — 上传到服务器
+
+### 步骤 4：同步训练数据到服务器
+
+使用 `server_helper.py upload` 做增量同步（只传变化的文件）。
+
+```bash
+cd /home/industai/workspace/SubStation_AI_Poject
+python3 scripts/server_helper.py -s 172.20.60.10 upload \
+  /media/industai/data11/SEG_DATA/yolo_data \
+  /data/zxk/dataset/yolo_data
+```
+
+**建议先 dry-run** 查看将要传输的文件：
+```bash
+python3 scripts/server_helper.py -s 172.20.60.10 upload --dry-run \
+  /media/industai/data11/SEG_DATA/yolo_data \
+  /data/zxk/dataset/yolo_data
+```
+
+### 步骤 5：同步代码到服务器
+
+Git push/pull 方式同步项目代码。
+
+```bash
+# 本地：确保已提交并推送
+cd /home/industai/workspace/SubStation_AI_Poject
+git status
+
+# 服务器：拉取最新代码
+python3 scripts/server_helper.py -s 172.20.60.10 exec \
+  "cd /home/industai/zxk/SubStation_AI_Poject && git pull"
+```
+
+---
+
+## 流水线：第三阶段 — 服务器训练
+
+### 步骤 6：检查 GPU 状态
+
+**必须在启动训练前检查**，因为服务器多人共享。
+
+```bash
+python3 scripts/server_helper.py -s 172.20.60.10 gpu
+```
+
+**判断逻辑**：
+- 显存占用 < 15% 且利用率 < 15% → 空闲（显示 "✓ 空闲"）
+- 挑选空闲 GPU 编号，传给训练的 `--device` 参数
+- 如果所有 GPU 都在使用，告诉用户等待或选择占用最低的 GPU
+
+### 步骤 7：启动训练（nohup 后台）
+
+```bash
+python3 scripts/server_helper.py -s 172.20.60.10 train \
+  --workdir /home/industai/zxk/SubStation_AI_Poject \
+  --logfile /home/industai/zxk/SubStation_AI_Poject/runs/train_$(date +%Y%m%d_%H%M%S).log \
+  "conda activate ultralytics-8.4.84 && CUDA_VISIBLE_DEVICES=0,1,2,3 python3 scripts/train_yolo.py \
+    --dataset_path /data/zxk/dataset/yolo_data \
+    --output_dir ./runs/train \
+    --yolo_version yolo26 \
+    --model_config train_configs/yolov26_l_seg_config.yaml \
+    --weights weights/yolo26l-seg.pt \
+    --model_size l \
+    --ignore_classes bei_jin,bei_jing,sheng_gao_zuo,you_zhen,mu_xian,dian_lan_zhong_duan,dian_kang_qi,you_wei,jie_xian_he,mo_ping,dian_rang_qi,二次接线盒 \
+    --device 0,1,2,3"
+```
+
+**重要**：
+- `--device` 参数必须与步骤 6 中确认的空闲 GPU 一致
+- 日志路径包含时间戳，方便后续查找
+- 记录下这个日志路径，后续监控需要
+
+### 步骤 8：查看训练进度
+
+```bash
+# 查看最新日志
+python3 scripts/server_helper.py -s 172.20.60.10 log \
+  /home/industai/zxk/SubStation_AI_Poject/runs/train_YYYYMMDD_HHMMSS.log
+
+# 查看最后 100 行
+python3 scripts/server_helper.py -s 172.20.60.10 log \
+  /home/industai/zxk/SubStation_AI_Poject/runs/train_YYYYMMDD_HHMMSS.log \
+  --tail 100
+
+# 检查训练进程是否还在运行
+python3 scripts/server_helper.py -s 172.20.60.10 exec \
+  "ps aux | grep train_yolo | grep -v grep"
+```
+
+---
+
+## 流水线：第四阶段 — 模型评估与下载
+
+### 步骤 9：模型验证
+
+训练完成后，在服务器上对 best.pt 做验证：
+
+```bash
+python3 scripts/server_helper.py -s 172.20.60.10 exec \
+  --workdir /home/industai/zxk/SubStation_AI_Poject \
+  "python3 scripts/train_yolo.py \
+    --mode val \
+    --dataset_path /data/zxk/dataset/yolo_data \
+    --weights ./runs/train/weights/best.pt \
+    --device 0"
+```
+
+### 步骤 10：下载模型与训练产物
+
+```bash
+# 下载模型权重
+python3 scripts/server_helper.py -s 172.20.60.10 download \
+  /home/industai/zxk/SubStation_AI_Poject/runs/train/weights \
+  ./runs/server_download/weights
+
+# 下载完整训练产物（含图表、日志）
+python3 scripts/server_helper.py -s 172.20.60.10 download \
+  /home/industai/zxk/SubStation_AI_Poject/runs/train \
+  ./runs/server_download
+
+# 下载训练日志
+python3 scripts/server_helper.py -s 172.20.60.10 download \
+  /home/industai/zxk/SubStation_AI_Poject/runs/train_YYYYMMDD_HHMMSS.log \
+  ./runs/
+```
+
+---
+
+## 训练结果分析与讨论
+
+训练完成后，agent 应主动分析关键指标并和用户讨论：
+
+### 需要关注的指标
+
+1. **mAP@0.5 和 mAP@0.5:0.95**
+   - > 0.7 基准良好，> 0.85 优秀
+   - 如果某个类别 AP 明显偏低，提示用户检查该类别标注质量
+
+2. **Box Loss vs Mask Loss**
+   - Box loss 远大于 mask loss → 定位不准，可能需要调整 anchor 或检查标注框
+   - Mask loss 远大于 box loss → 分割轮廓不准，可能需要检查 polygon 标注精度
+
+3. **训练/验证 Loss 曲线**
+   - 训练 loss 持续下降但验证 loss 上升 → 过拟合，建议增加数据增强或减少 epochs
+   - 两个 loss 都很高且不下降 → 学习率可能有问题
+
+4. **类别分布**
+   - 检查 `label_statistics_*.txt`，长尾类别（样本 < 100）建议增加数据
+
+### 讨论要点
+
+- 哪些类别表现差？是否需要补充标注数据？
+- 是否需要调整 `ignore_classes`（太少的类别先忽略）？
+- 数据增强参数是否需要调整？
+- 是否需要换模型尺寸（如 l → x 提高精度）？
+
+---
+
+## 本地操作快捷参考
+
+### 数据集统计
+
+```bash
+python3 ./scripts/main.py \
+  --dataset_path /media/industai/data11/SEG_DATA/roi自动分割 \
   --mode stats
 ```
-**输出**：各类别图片数量统计表
 
-### 示例2：查看标注质量
+### 标注可视化
+
 ```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-  --dataset_path ./datasets/substation \
+python3 ./scripts/main.py \
+  --dataset_path /media/industai/data11/SEG_DATA/roi自动分割 \
   --mode visualize \
-  --samples_per_class 5
-```
-**输出**：弹窗展示每类5张样本的mask叠加效果
-
-### 示例3：完整分析
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-  --dataset_path ./datasets/substation \
-  --mode full \
   --samples_per_class 3
 ```
-**输出**：统计报告 + 可视化图片
 
-### 示例4：转换为YOLO格式
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-  --dataset_path ./datasets/substation \
-  --mode yolo \
-  --output_yolo_path ./yolo_dataset
-```
-**输出**：YOLO格式数据集（images/、labels/、classes.txt）
+### 本地快速训练测试
 
-### 示例5：带边界扩展的YOLO转换
 ```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/main.py \
-  --dataset_path ./datasets/substation \
-  --mode yolo \
-  --output_yolo_path ./yolo_dataset \
-  --expand_ratio 0.1 \
-  --min_size 64
-```
-**说明**：边界框扩展10%，跳过小于64像素的目标
-
-### 示例6：验证YOLO数据集
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/yolo_validator.py \
-  --yolo_path ./yolo_dataset \
-  --samples_per_class 10 \
-  --output_path ./validation_output
-```
-**说明**：每类随机选择10张图片，将YOLO标注转换为mask并以半透明彩色叠加，每张图片单独保存到对应类别子目录
-
-### 示例7：训练YOLOv8实例分割模型（推荐）
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/train_yolo.py \
-  --dataset_path ./yolo_dataset \
-  --output_dir ./runs/train \
-  --yolo_version yolov8 \
-  --model_size s \
-  --epochs 300 \
-  --batch_size 32 \
-  --img_size 640
-```
-**说明**：使用Ultralytics YOLOv8训练实例分割模型，支持n/s/m/l/x五种尺寸
-
-### 示例8：训练YOLO26实例分割模型
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/train_yolo.py \
-  --dataset_path ./yolo_dataset \
-  --output_dir ./runs/train \
+python3 scripts/train_yolo.py \
+  --dataset_path /media/industai/data11/SEG_DATA/yolo_data \
+  --output_dir ./runs/test \
   --yolo_version yolo26 \
   --model_size s \
-  --epochs 300 \
-  --batch_size 32 \
-  --img_size 640
+  --epochs 5 \
+  --batch_size 8 \
+  --device 0
 ```
-**说明**：使用Ultralytics YOLO26训练实例分割模型，支持n/s/m/l/x五种尺寸
 
-### 示例9：训练后检查Mask效果
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/validate_with_mask.py \
-  --weights ./runs/train/exp/weights/best.pt \
-  --data ./yolo_dataset/data.yaml \
-  --output_dir ./validation_vis \
-  --num_samples 10 \
-  --conf 0.25
-```
-**说明**：专门用于可视化mask预测效果，解决默认验证图中不显示mask的问题
+---
 
-### 示例10：诊断模型Mask输出
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/diagnose_mask.py \
-  /path/to/weights.pt \
-  /path/to/data.yaml
-```
-**说明**：诊断模型是否正确输出mask，排查mask不可见问题
+## 数据集目录结构参考
 
-### 示例11：训练YOLOv6实例分割模型
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/train_yolo.py \
-  --dataset_path ./yolo_dataset \
-  --output_dir ./runs/train \
-  --yolo_version yolov6 \
-  --epochs 300 \
-  --batch_size 32 \
-  --img_size 640
 ```
-**说明**：使用YOLOv6训练实例分割模型，自动划分训练集和验证集
+raw_data/<batch>/<category>/<N>/
+├── <jpg文件夹>/
+│   ├── img_001.jpg
+│   └── ...
+└── <N>-json.zip
+    ├── img_001.json
+    └── ...
 
-### 示例12：验证训练好的模型
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/train_yolo.py \
-  --mode val \
-  --dataset_path ./yolo_dataset \
-  --weights ./runs/train/exp/weights/best.pt
-```
-**说明**：使用验证集评估模型性能
+roi自动分割/
+├── img_001.jpg
+├── img_001.json
+└── ...
 
-### 示例13：导出模型为ONNX格式
-```bash
-python /workspace/projects/substation-segmentation-dataset/scripts/train_yolo.py \
-  --mode export \
-  --weights ./runs/train/exp/weights/best.pt \
-  --export_format onnx
+converted_dataset/
+├── category_1/
+│   ├── img_001.jpg
+│   ├── img_001.json
+│   └── ...
+└── category_n/
+
+yolo_data/
+├── train/
+│   ├── images/
+│   └── labels/
+├── val/
+│   ├── images/
+│   └── labels/
+├── classes.txt
+└── data.yaml
 ```
-**说明**：将训练好的模型导出为ONNX格式，便于部署
+
+---
+
+## 脚本索引
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/extract_and_copy.sh` | 解压原始数据（zip→jpg+json） |
+| `scripts/main.py` | 数据统计/可视化/YOLO转换主入口 |
+| `scripts/dataset_cropper.py` | convert 模式的裁剪逻辑 |
+| `scripts/yolo_formatter.py` | yolo 模式的格式转换逻辑 |
+| `scripts/train_yolo.py` | YOLO 训练统一入口 |
+| **`scripts/server_helper.py`** | **服务器 GPU 检查/远程命令/文件传输** |
+| `statistic/check_servers.py` | 批量检查所有服务器 GPU 状态 |
+
+---
+
+## 安全约束（必须遵守）
+
+1. **服务器操作限制**：`server_helper.py` 只能在指定的两个目录操作：
+   - `/home/industai/zxk/SubStation_AI_Poject`（代码+模型）
+   - `/data/zxk/dataset/`（训练数据）
+   - **绝对禁止**操作服务器上其他路径的文件
+
+2. **删除操作必须通知用户**：任何 `rm`、删除目录等操作前，agent 必须先向用户说明将要删除的内容并等待确认。
+
+3. **GPU 冲突避免**：启动训练前必须检查 GPU 状态，不得在已被占用的 GPU 上启动训练。
+
+4. **数据备份意识**：训练数据上传前确认本地 yolo_data 是最新的；下载模型时不要覆盖本地已有的同名模型。
+
+5. **配置文件安全**：`.server_config.yaml` 含密码，已加入 `.gitignore`，禁止提交到 Git。
