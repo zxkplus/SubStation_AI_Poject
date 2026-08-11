@@ -1,0 +1,6 @@
+# Minimal dependencies for label_analyzer_gui.py
+# Install: pip install -r requirements_gui.txt
+matplotlib>=3.5.0
+orjson>=3.0.0
+pillow>=9.0.0
+numpy>=1.21.0
