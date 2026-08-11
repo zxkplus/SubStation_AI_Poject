@@ -16,7 +16,7 @@ model:
 # 训练参数（通过命令行参数覆盖）
 training:
   epochs: 60
-  batch_size: 6
+  batch_size: 3
   img_size: 1024
   optimizer: auto  # auto, SGD, Adam, AdamW
   lr0: 0.01  # 初始学习率
