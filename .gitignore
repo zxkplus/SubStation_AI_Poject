@@ -23,7 +23,6 @@ logs
 demo_logs
 runs*/
 params_log
-statistic/check_servers.py
 
 # 视频文件
 *.mp4
@@ -58,6 +57,9 @@ statistic/check_servers.py
 *.pptx
 *.xlsx
 *.csv
+# 服务器配置文件包含明文凭据，不入库；使用 example 文件复制并填写
+statistic/server_config.csv
+!statistic/server_config.example.csv
 
 visualization_output/*
 .server_config.yaml
