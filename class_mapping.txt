@@ -7,7 +7,7 @@
 盆式绝缘子:jue_yuan_zi
 标识:she_bei_biao_shi
 设备标识:she_bei_biao_shi
-指示:she_bei_biao_shi
+指示:zhi_shi
 机构箱:ji_gou_xiang
 接地引下线:jie_di_yin_xia_xian
 升高坐:sheng_gao_zuo
@@ -24,3 +24,4 @@
 电缆终端:dian_lan_zhong_duan
 电抗器:dian_kang_qi
 二次接线盒:jie_xian_he
+bei_jin:bei_jing
