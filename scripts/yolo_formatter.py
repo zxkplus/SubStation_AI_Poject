@@ -193,8 +193,30 @@ class YOLOFormatter:
         Returns:
             [x1, y1, x2, y2, ...] - 归一化坐标
         """
-        yolo_coords = []
+        if img_width <= 0 or img_height <= 0:
+            return []
+
+        # 裁剪多边形到图像区域，避免生成越界归一化坐标。
+        # 过滤掉完全落在图像外且没有有效内部区域的标注。
+        clipped_polygon = []
         for x, y in polygon:
+            cx = min(max(float(x), 0.0), float(img_width))
+            cy = min(max(float(y), 0.0), float(img_height))
+            if clipped_polygon and clipped_polygon[-1] == [cx, cy]:
+                continue
+            clipped_polygon.append([cx, cy])
+
+        if len(clipped_polygon) < 3:
+            return []
+
+        # 全部分布在同一点的多边形没有有效面积，也跳过。
+        xs = [p[0] for p in clipped_polygon]
+        ys = [p[1] for p in clipped_polygon]
+        if max(xs) - min(xs) < 1e-9 and max(ys) - min(ys) < 1e-9:
+            return []
+
+        yolo_coords = []
+        for x, y in clipped_polygon:
             norm_x = x / img_width
             norm_y = y / img_height
             yolo_coords.extend([norm_x, norm_y])
@@ -249,6 +271,8 @@ class YOLOFormatter:
                 continue
 
             yolo_coords = self.polygon_to_yolo_format(polygon, img_width, img_height)
+            if len(yolo_coords) < 6:  # 少于3个有效点无法构成多边形
+                continue
 
             # 构造YOLO格式字符串
             yolo_line = f"{class_id} " + " ".join([f"{coord:.6f}" for coord in yolo_coords])
