@@ -44,7 +44,8 @@ def generate_data_yaml(
     output_path: str,
     train_ratio: float = 0.8,
     val_ratio: float = 0.2,
-    ignore_classes: list = None
+    ignore_classes: list = None,
+    remap_target_class: str = None
 ):
     """
     自动生成data.yaml配置文件
@@ -55,6 +56,7 @@ def generate_data_yaml(
         train_ratio: 训练集比例
         val_ratio: 验证集比例
         ignore_classes: 要忽略的类别列表
+        remap_target_class: 非空时，被忽略类别的标签改写为该类别，而不是删除
     """
     if ignore_classes is None:
         ignore_classes = []
@@ -68,6 +70,12 @@ def generate_data_yaml(
 
     with open(classes_file, 'r', encoding='utf-8') as f:
         original_classes = [line.strip().split(' ', 1)[1] for line in f if line.strip()]
+
+    if remap_target_class is not None:
+        if remap_target_class not in original_classes:
+            raise ValueError(f"重映射目标类不存在于classes.txt: {remap_target_class}")
+        if remap_target_class in ignore_classes:
+            raise ValueError(f"重映射目标类不能同时位于ignore_classes: {remap_target_class}")
     
     # 过滤要忽略的类别，构建旧ID→新ID的映射表
     filtered_classes = [c for c in original_classes if c not in ignore_classes]
@@ -78,15 +86,27 @@ def generate_data_yaml(
     # 构建 old_class_id → new_class_id 映射（用于更新标签文件中的类别ID）
     old_id_to_new_id = {}
     new_id = 0
+    target_new_id = None
     for old_id, class_name in enumerate(original_classes):
         if class_name not in ignore_classes:
             old_id_to_new_id[old_id] = new_id
+            if remap_target_class is not None and class_name == remap_target_class:
+                target_new_id = new_id
             new_id += 1
+
+    if remap_target_class is not None:
+        if target_new_id is None:
+            raise ValueError(f"无法确定重映射目标类的新ID: {remap_target_class}")
+        for old_id, class_name in enumerate(original_classes):
+            if class_name in ignore_classes:
+                old_id_to_new_id[old_id] = target_new_id
 
     if len(filtered_classes) != len(original_classes):
         logger.info(f"已过滤类别: {set(original_classes) - set(filtered_classes)}")
         logger.info(f"剩余类别: {filtered_classes}")
         logger.info(f"类别ID映射: {old_id_to_new_id}")
+        if remap_target_class is not None:
+            logger.info(f"被忽略类别将重映射到: {remap_target_class}")
 
     # 检查是否存在train/val/test目录结构
     train_dir = dataset_path / 'train'
@@ -180,7 +200,7 @@ def remap_label_class_ids(label_dir: Path, old_id_to_new_id: dict):
         logger.info(f"已重新映射 {remapped_count} 个标签文件的类别ID")
 
 
-def filter_label_file(label_path, class_mapping, ignore_classes):
+def filter_label_file(label_path, class_mapping, ignore_classes, remap_target_class=None):
     """
     过滤标注文件，移除指定的类别
     
@@ -188,12 +208,19 @@ def filter_label_file(label_path, class_mapping, ignore_classes):
         label_path: 标注文件路径
         class_mapping: 类别名称到ID的映射字典
         ignore_classes: 要忽略的类别名称列表
+        remap_target_class: 非空时，被忽略类别的标签改写为该类别，而不是删除
         
     Returns:
         bool: 如果文件中有有效标注返回True，否则返回False
     """
     if not label_path.exists():
         return False
+
+    target_old_id = None
+    if remap_target_class is not None:
+        target_old_id = class_mapping.get(remap_target_class)
+        if target_old_id is None:
+            raise ValueError(f"重映射目标类不存在于类别映射中: {remap_target_class}")
     
     # 创建反向映射：ID到类别名称
     id_to_class = {v: k for k, v in class_mapping.items()}
@@ -216,7 +243,12 @@ def filter_label_file(label_path, class_mapping, ignore_classes):
         try:
             class_id = int(parts[0])
             class_name = id_to_class.get(class_id)
-            if class_name is None or class_name not in ignore_classes:
+            if class_name in ignore_classes:
+                if remap_target_class is None:
+                    continue
+                parts[0] = str(target_old_id)
+                filtered_lines.append(' '.join(parts))
+            else:
                 filtered_lines.append(line)
         except (ValueError, KeyError):
             # 如果无法解析类别ID，保留原行（可能是格式问题）
@@ -238,7 +270,8 @@ def prepare_dataset(
     dataset_path: str,
     train_ratio: float = 0.8,
     val_ratio: float = 0.2,
-    ignore_classes: list = None
+    ignore_classes: list = None,
+    remap_target_class: str = None
 ):
     """
     准备训练数据集，划分训练集和验证集
@@ -252,6 +285,7 @@ def prepare_dataset(
         train_ratio: 训练集比例
         val_ratio: 验证集比例
         ignore_classes: 要忽略的类别列表
+        remap_target_class: 非空时，被忽略类别的标签改写为该类别，而不是删除
     """
     if ignore_classes is None:
         ignore_classes = []
@@ -323,7 +357,7 @@ def prepare_dataset(
                     # 复制并过滤标注
                     temp_label_path = train_lbl_dir / label_file.name
                     shutil.copy2(label_file, temp_label_path)
-                    if filter_label_file(temp_label_path, class_mapping, ignore_classes):
+                    if filter_label_file(temp_label_path, class_mapping, ignore_classes, remap_target_class):
                         valid_train_files += 1
                     else:
                         # 如果过滤后没有有效标注，删除对应的图片
@@ -340,7 +374,7 @@ def prepare_dataset(
                     # 复制并过滤标注
                     temp_label_path = val_lbl_dir / label_file.name
                     shutil.copy2(label_file, temp_label_path)
-                    if filter_label_file(temp_label_path, class_mapping, ignore_classes):
+                    if filter_label_file(temp_label_path, class_mapping, ignore_classes, remap_target_class):
                         valid_val_files += 1
                     else:
                         # 如果过滤后没有有效标注，删除对应的图片
@@ -360,7 +394,7 @@ def prepare_dataset(
                         # 复制并过滤标注
                         temp_label_path = test_lbl_dir / label_file.name
                         shutil.copy2(label_file, temp_label_path)
-                        if filter_label_file(temp_label_path, class_mapping, ignore_classes):
+                        if filter_label_file(temp_label_path, class_mapping, ignore_classes, remap_target_class):
                             valid_test_files += 1
                         else:
                             # 如果过滤后没有有效标注，删除对应的图片
@@ -405,7 +439,7 @@ def prepare_dataset(
                 if not img_file.exists():
                     img_file = train_img_dir / (label_file.stem + '.bmp')
                 
-                if filter_label_file(label_file, class_mapping, ignore_classes):
+                if filter_label_file(label_file, class_mapping, ignore_classes, remap_target_class):
                     valid_train_files += 1
                 else:
                     # 如果过滤后没有有效标注，删除对应的图片
@@ -423,7 +457,7 @@ def prepare_dataset(
                 if not img_file.exists():
                     img_file = val_img_dir / (label_file.stem + '.bmp')
                 
-                if filter_label_file(label_file, class_mapping, ignore_classes):
+                if filter_label_file(label_file, class_mapping, ignore_classes, remap_target_class):
                     valid_val_files += 1
                 else:
                     # 如果过滤后没有有效标注，删除对应的图片
@@ -442,7 +476,7 @@ def prepare_dataset(
                     if not img_file.exists():
                         img_file = test_img_dir / (label_file.stem + '.bmp')
                     
-                    if filter_label_file(label_file, class_mapping, ignore_classes):
+                    if filter_label_file(label_file, class_mapping, ignore_classes, remap_target_class):
                         valid_test_files += 1
                     else:
                         # 如果过滤后没有有效标注，删除对应的图片
@@ -474,7 +508,7 @@ def prepare_dataset(
     for category_dir in dataset_path.iterdir():
         if category_dir.is_dir() and category_dir.name not in ['train', 'val', 'test']:
             # 如果当前类别在忽略列表中，跳过
-            if category_dir.name in ignore_classes:
+            if category_dir.name in ignore_classes and remap_target_class is None:
                 continue
                 
             images_dir = category_dir / 'images'
@@ -523,7 +557,26 @@ def prepare_dataset(
             # 复制图片
             shutil.copy2(item['img_path'], target_dir / 'images' / item['img_path'].name)
             # 复制标注
-            shutil.copy2(item['label_path'], target_dir / 'labels' / item['label_path'].name)
+            label_src = item['label_path']
+            label_dst = target_dir / 'labels' / label_src.name
+            if remap_target_class is not None and item['category'] in ignore_classes:
+                target_old_id = class_mapping.get(remap_target_class)
+                if target_old_id is None:
+                    raise ValueError(f"重映射目标类不存在于类别映射中: {remap_target_class}")
+                with open(label_src, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                rewritten_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split()
+                    parts[0] = str(target_old_id)
+                    rewritten_lines.append(' '.join(parts))
+                if rewritten_lines:
+                    label_dst.write_text('\n'.join(rewritten_lines) + '\n', encoding='utf-8')
+            else:
+                shutil.copy2(label_src, label_dst)
 
     copy_images(train_images, train_dir)
     copy_images(val_images, val_dir)
@@ -590,6 +643,8 @@ def main():
                         help='早停耐心值')
     parser.add_argument('--ignore_classes', type=str, nargs='*', default=[],
                         help='要忽略的类别名称列表（多个类别用空格或逗号分隔）')
+    parser.add_argument('--remap_ignore_to', type=str, default=None,
+                        help='非空时，被忽略类别的标注改写为该类别而不是删除（例如 bei_jing）')
     parser.add_argument('--force_regenerate_data_config', action='store_true', default=False,
                         help='强制重新生成 data.yaml（即使文件已存在），确保类别ID与labels一致')
 
@@ -601,6 +656,9 @@ def main():
         for item in args.ignore_classes:
             expanded.extend([c.strip() for c in item.split(',') if c.strip()])
         args.ignore_classes = expanded
+
+    if args.remap_ignore_to and not args.ignore_classes:
+        parser.error('--remap_ignore_to 需要同时指定 --ignore_classes')
 
     try:
         # 检查YOLO版本
@@ -615,13 +673,28 @@ def main():
 
         # 生成 data.yaml：文件不存在时自动生成，或 --force_regenerate_data_config 强制重新生成
         should_generate = args.force_regenerate_data_config or not Path(args.data_config).exists()
+        if args.remap_ignore_to and not should_generate:
+            logger.warning("--remap_ignore_to 需要重新准备数据集，请使用 --force_regenerate_data_config 或删除旧的 data.yaml")
         if should_generate:
             if args.force_regenerate_data_config:
                 logger.info("强制重新生成 data.yaml（--force_regenerate_data_config）...")
             else:
                 logger.info("数据集配置文件不存在，正在准备数据集...")
-            prepare_dataset(args.dataset_path, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
-            _, old_id_to_new_id = generate_data_yaml(args.dataset_path, args.data_config, args.train_ratio, 1 - args.train_ratio, args.ignore_classes)
+            prepare_dataset(
+                args.dataset_path,
+                args.train_ratio,
+                1 - args.train_ratio,
+                args.ignore_classes,
+                args.remap_ignore_to
+            )
+            _, old_id_to_new_id = generate_data_yaml(
+                args.dataset_path,
+                args.data_config,
+                args.train_ratio,
+                1 - args.train_ratio,
+                args.ignore_classes,
+                args.remap_ignore_to
+            )
 
             # 如果使用了 ignore_classes，需要重新映射标签文件中的类别ID
             if args.ignore_classes and old_id_to_new_id:
