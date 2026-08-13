@@ -30,7 +30,7 @@ except ImportError:
 class DatasetCropper:
     """数据集裁剪器（支持多线程并行处理）"""
     
-    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None, class_mapping_file: str = None, enable_rectangle: bool = False):
+    def __init__(self, input_dataset_path: str, output_dataset_path: str, ignore_classes: List[str] = None, class_mapping_file: str = None, enable_rectangle: bool = False, only_categories: List[str] = None):
         """
         初始化裁剪器
 
@@ -40,11 +40,13 @@ class DatasetCropper:
             ignore_classes: 要忽略的类别名称列表，这些类别的标注会被直接丢弃，不会出现在输出中
             class_mapping_file: 类别映射文件路径，用于将中文类别名映射为英文类别名
             enable_rectangle: 是否启用矩形优先策略，默认False
+            only_categories: 仅处理指定的类别名称列表，None表示处理全部类别
         """
         self.input_path = Path(input_dataset_path)
         self.output_path = Path(output_dataset_path)
         self.supported_image_formats = {'.jpg', '.jpeg', '.png', '.bmp'}
         self.ignore_classes = set(ignore_classes) if ignore_classes else set()
+        self.only_categories = set(only_categories) if only_categories else None
         self.class_mapping = self._load_class_mapping(class_mapping_file) if class_mapping_file else {}
         self.enable_rectangle = enable_rectangle
         
@@ -127,7 +129,10 @@ class DatasetCropper:
                         # 跳过被忽略的类别
                         if category_name in self.ignore_classes:
                             continue
-                            
+
+                        if self.only_categories is not None and category_name not in self.only_categories:
+                            continue
+
                         dataset_structure[category_name].append(
                             (str(file_path), str(json_path))
                         )
@@ -139,6 +144,9 @@ class DatasetCropper:
                 
                 # 跳过被忽略的类别目录
                 if category_dir.name in self.ignore_classes:
+                    continue
+
+                if self.only_categories is not None and category_dir.name not in self.only_categories:
                     continue
                 
                 # 遍历第二层目录（图片和JSON文件）

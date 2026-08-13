@@ -168,6 +168,13 @@ def build_batches():
             label=f"20260708 油枕{n}", target="油枕",
             mixed_zip=os.path.join(yz, zname)))
 
+    # 20260812 散热器1000
+    batches.append(dict(
+        label="20260812 散热器1000",
+        target="散热器",
+        mixed_zip=os.path.join(R, "202608040009_20260812",
+                               "数据外协249批次--散热器1000.zip")))
+
     return batches
 
 
@@ -282,12 +289,30 @@ def _print_report(report, total_ok):
 
 
 def main():
+    only = None
+    if "--only" in sys.argv:
+        idx = sys.argv.index("--only")
+        if idx + 1 >= len(sys.argv):
+            print("--only 需要一个筛选值", file=sys.stderr)
+            sys.exit(2)
+        only = sys.argv[idx + 1]
+
+    batches = build_batches()
+    if only is not None:
+        batches = [
+            b for b in batches
+            if only in b["label"] or only in b["target"]
+        ]
+        if not batches:
+            print(f"没有匹配 --only={only} 的批次", file=sys.stderr)
+            sys.exit(2)
+
     if "--dry-run" in sys.argv:
-        for b in build_batches():
+        for b in batches:
             print(b["label"], "->", b["target"],
                   b.get("img_dir"), b.get("json_zip") or b.get("json_dir") or b.get("mixed_zip"))
         return
-    run(build_batches())
+    run(batches)
 
 
 if __name__ == "__main__":

@@ -109,6 +109,15 @@ def main():
         default=[],
         help='要忽略的类别名称列表（用于yolo模式），这些类别将不会包含在输出数据集中'
     )
+
+    # 新增：仅转换指定类别参数
+    parser.add_argument(
+        '--categories',
+        nargs='+',
+        type=str,
+        default=None,
+        help='仅转换指定的类别名称列表（用于convert模式），多个类别用空格或逗号分隔'
+    )
     
     # 新增：类别映射文件参数
     parser.add_argument(
@@ -138,6 +147,15 @@ def main():
             else:
                 processed_ignore_classes.append(item)
         args.ignore_classes = processed_ignore_classes
+
+    if args.categories:
+        processed_categories = []
+        for item in args.categories:
+            if ',' in item:
+                processed_categories.extend([cls.strip() for cls in item.split(',') if cls.strip()])
+            else:
+                processed_categories.append(item)
+        args.categories = processed_categories
     
     print("=" * 60)
     print("变电站设备分割数据集处理工具集")
@@ -194,7 +212,14 @@ def main():
                         continue
                     
                     print(f"处理数据集: {dataset_path}")
-                    cropper = DatasetCropper(dataset_path, args.output_yolo_path, args.ignore_classes, args.class_mapping_file, enable_rectangle=args.enable_rectangle)
+                    cropper = DatasetCropper(
+                        dataset_path,
+                        args.output_yolo_path,
+                        args.ignore_classes,
+                        args.class_mapping_file,
+                        enable_rectangle=args.enable_rectangle,
+                        only_categories=args.categories
+                    )
                     
                     # convert模式：不创建子目录，每个类别转换100张
                     # 当处理多个数据集时，不保留类别目录结构以避免冲突

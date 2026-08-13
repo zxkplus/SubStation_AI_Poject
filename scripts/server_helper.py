@@ -219,7 +219,7 @@ def _get_remote_files(sftp, remote_dir):
 
 
 def cmd_upload(srv, local_dir, remote_dir, dry_run=False):
-    """增量上传：本地 → 服务器"""
+    """增量上传：本地 → 服务器（同路径且大小相同则跳过）"""
     local_dir = str(Path(local_dir).resolve())
     local_files = _get_local_files(local_dir)
 
@@ -242,8 +242,8 @@ def cmd_upload(srv, local_dir, remote_dir, dry_run=False):
             remote_key = rel_path
             if remote_key in remote_files:
                 r = remote_files[remote_key]
-                # 比较大小和 mtime（允许 2 秒误差）
-                if r['size'] == info['size'] and abs(r['mtime'] - info['mtime']) <= 2:
+                # 同路径且大小相同视为已同步，避免本地 mtime 更新导致全量重传
+                if r['size'] == info['size']:
                     skip_count += 1
                     continue
 
